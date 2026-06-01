@@ -288,6 +288,55 @@ body {
 .why-item.pro::before { color: var(--green); }
 .why-item.con::before { color: var(--red); }
 
+/* ── Improvements ────────────────────────────────────────── */
+
+.improvements {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+}
+
+.imp-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 9px 12px;
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: var(--r);
+  cursor: pointer;
+  transition: border-color 0.15s, background 0.15s;
+  width: 100%;
+  text-align: left;
+}
+
+.imp-item:hover {
+  background: var(--border);
+  border-color: var(--yellow);
+}
+
+.imp-title {
+  font-size: 0.82rem;
+  color: var(--text-dim);
+  flex: 1;
+}
+
+.imp-meta {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 0.78rem;
+  color: var(--text-muted);
+  white-space: nowrap;
+}
+
+.imp-gain {
+  color: var(--green);
+  font-weight: 700;
+  font-size: 0.82rem;
+}
+
 /* ── Category bars ───────────────────────────────────────── */
 
 .section-title {

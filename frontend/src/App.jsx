@@ -151,6 +151,28 @@ function WhyPanel({ pros, cons }) {
   )
 }
 
+function ImprovementsList({ improvements, onHighlight }) {
+  if (!improvements?.length) return null
+  return (
+    <div className="improvements">
+      <p className="section-title">How to improve</p>
+      {improvements.map(imp => (
+        <button
+          key={imp.rank}
+          className="imp-item"
+          onClick={() => onHighlight?.(imp)}
+        >
+          <span className="imp-title">{imp.title}</span>
+          <span className="imp-meta">
+            {imp.from_score} → {imp.to_score}
+            <span className="imp-gain">+{imp.score_delta}</span>
+          </span>
+        </button>
+      ))}
+    </div>
+  )
+}
+
 function DisclosureFooter({ disclosure }) {
   if (!disclosure) return null
   return (
@@ -172,10 +194,11 @@ export default function App() {
   const [result, setResult]               = useState(null)
   const [mapReady, setMapReady]           = useState(false)
   const [sectorsGeo, setSectorsGeo]       = useState(null)
+  const [highlightedImp, setHighlightedImp] = useState(null)
 
-  const mapContainer = useRef(null)
-  const mapInst      = useRef(null)
-  const geoCache     = useRef({})
+  const mapContainer  = useRef(null)
+  const mapInst       = useRef(null)
+  const geoCache      = useRef({})
   const isFirstRender = useRef(true)
 
   // ── Init map ────────────────────────────────────────────────────────────
@@ -272,6 +295,52 @@ export default function App() {
       })
     }
   }, [mapReady, result])
+
+  // ── Improvement markers layer ───────────────────────────────────────────
+  useEffect(() => {
+    const m = mapInst.current
+    if (!mapReady || !m) return
+
+    const improvements = result?.improvements ?? []
+    const geojson = {
+      type: "FeatureCollection",
+      features: improvements
+        .filter(i => i.suggested_lat && i.suggested_lng)
+        .map(i => ({
+          type: "Feature",
+          geometry: { type: "Point", coordinates: [i.suggested_lng, i.suggested_lat] },
+          properties: { rank: i.rank, title: i.title, delta: i.score_delta,
+                        highlighted: highlightedImp?.rank === i.rank },
+        })),
+    }
+
+    if (m.getSource("improvements")) {
+      m.getSource("improvements").setData(geojson)
+    } else {
+      m.addSource("improvements", { type: "geojson", data: geojson })
+      m.addLayer({
+        id: "improvements-circles",
+        type: "circle",
+        source: "improvements",
+        paint: {
+          "circle-radius": ["case", ["get", "highlighted"], 12, 8],
+          "circle-color": "#facc15",
+          "circle-stroke-width": 2,
+          "circle-stroke-color": "#fff",
+          "circle-opacity": 0.9,
+        },
+      })
+    }
+    // Fly to highlighted improvement
+    if (highlightedImp?.suggested_lat && highlightedImp?.suggested_lng) {
+      m.easeTo({
+        center: [highlightedImp.suggested_lng, highlightedImp.suggested_lat],
+        zoom: Math.max(m.getZoom(), 14),
+        duration: 500,
+      })
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [mapReady, result, highlightedImp])
 
   // ── Re-fetch on scenario change ─────────────────────────────────────────
   useEffect(() => {
@@ -377,6 +446,14 @@ export default function App() {
 
             {/* Pros / cons */}
             <WhyPanel pros={result.pros} cons={result.cons} />
+
+            {/* Improvements */}
+            <ImprovementsList
+              improvements={result.improvements}
+              onHighlight={imp => setHighlightedImp(
+                imp.rank === highlightedImp?.rank ? null : imp
+              )}
+            />
 
             {/* Category breakdown */}
             <p className="section-title">Category breakdown</p>

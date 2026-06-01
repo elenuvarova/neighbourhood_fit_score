@@ -154,6 +154,12 @@ def _sector_score_response(
                    "Run pipeline/06_seed.py first.",
         )
 
+    improvements = db.exec(
+        select(Improvement)
+        .where(Improvement.sector_id == sector_id, Improvement.scenario == scenario)
+        .order_by(Improvement.rank)
+    ).all()
+
     response: dict[str, Any] = {
         "sector": {
             "id": sector.id,
@@ -169,6 +175,19 @@ def _sector_score_response(
         "breakdown": score_row.breakdown,
         "pros": score_row.pros or [],
         "cons": score_row.cons or [],
+        "improvements": [
+            {
+                "rank": imp.rank,
+                "title": imp.title,
+                "category": imp.category,
+                "score_delta": imp.score_delta,
+                "from_score": imp.from_score,
+                "to_score": imp.to_score,
+                "suggested_lat": imp.suggested_lat,
+                "suggested_lng": imp.suggested_lng,
+            }
+            for imp in improvements
+        ],
         "disclosure": {
             "data_date": "2024",
             "source": "OpenStreetMap contributors, Statbel, STIB-MIVB",
