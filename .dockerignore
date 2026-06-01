@@ -7,3 +7,16 @@ build/
 .git/
 *.log
 .DS_Store
+
+# Python dev artifacts
+backend/.venv/
+**/__pycache__/
+*.pyc
+
+# Pipeline raw data — large, not needed in runtime image
+backend/pipeline/data/raw/
+backend/pipeline/data/osmnx_cache/
+
+# Pipeline processed files NOT committed as seeds (regenerable locally)
+backend/pipeline/data/processed/pois_all.geojson
+backend/pipeline/data/processed/brussels_walk.graphml

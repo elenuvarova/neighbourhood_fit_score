@@ -388,6 +388,38 @@ body {
   text-align: right;
 }
 
+/* ── POI Layer toggles ───────────────────────────────────── */
+
+.layer-toggles {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+}
+
+.layer-btn {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  padding: 5px 10px;
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: 20px;
+  color: var(--text-dim);
+  font-size: 0.75rem;
+  cursor: pointer;
+  transition: all 0.15s;
+}
+
+.layer-btn:hover { background: var(--border); color: var(--text); }
+.layer-btn.active { background: var(--surface-2); border-color: #555; color: var(--text); }
+
+.layer-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+
 /* ── Disclosure ──────────────────────────────────────────── */
 
 .disclosure {
@@ -409,6 +441,22 @@ body {
   align-items: center;
   gap: 6px;
 }
+
+.method-grid {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 4px 12px;
+  margin-top: 8px;
+  font-size: 0.74rem;
+}
+
+.method-grid dt {
+  color: var(--text-dim);
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.method-grid dd { color: var(--text-muted); }
 
 .disclosure summary::before {
   content: "▸";

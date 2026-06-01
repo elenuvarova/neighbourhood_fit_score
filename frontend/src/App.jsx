@@ -37,6 +37,16 @@ const CATEGORY_LABELS = {
   sport: "Sports",
 }
 
+// POI categories available as map layer toggles
+const MAP_LAYERS = [
+  { cat: "school",   color: "#60a5fa", label: "Schools" },
+  { cat: "park",     color: "#4ade80", label: "Parks" },
+  { cat: "pharmacy", color: "#f87171", label: "Pharmacies" },
+  { cat: "transit",  color: "#a78bfa", label: "Transit" },
+  { cat: "cafe",     color: "#fb923c", label: "Cafés" },
+  { cat: "sport",    color: "#facc15", label: "Sport" },
+]
+
 const SCENARIO_WEIGHTS = {
   family: {
     school: 15, childcare: 10, supermarket: 10, pharmacy: 8, convenience: 2,
@@ -173,12 +183,106 @@ function ImprovementsList({ improvements, onHighlight }) {
   )
 }
 
+// ── POI layer toggles ───────────────────────────────────────────────────────
+
+function MapLayerToggles({ sectorId, mapInst, mapReady }) {
+  const [active, setActive] = useState(new Set())
+  const cache = useRef({})
+
+  useEffect(() => {
+    const m = mapInst.current
+    if (!m) return
+    MAP_LAYERS.forEach(({ cat }) => {
+      if (m.getLayer(`poi-${cat}`)) m.removeLayer(`poi-${cat}`)
+      if (m.getSource(`poi-src-${cat}`)) m.removeSource(`poi-src-${cat}`)
+    })
+    setActive(new Set())
+  }, [sectorId, mapInst])
+
+  const toggle = async (cat, color) => {
+    const m = mapInst.current
+    if (!m || !mapReady) return
+    const key = `${sectorId}_${cat}`
+    const layerId = `poi-${cat}`
+    const srcId = `poi-src-${cat}`
+
+    if (active.has(cat)) {
+      if (m.getLayer(layerId)) m.removeLayer(layerId)
+      if (m.getSource(srcId)) m.removeSource(srcId)
+      setActive(prev => { const s = new Set(prev); s.delete(cat); return s })
+      return
+    }
+
+    let features = cache.current[key]
+    if (!features) {
+      try {
+        const data = await fetch(
+          `${API}/api/pois?sector_id=${sectorId}&categories=${cat}`
+        ).then(r => r.json())
+        features = (data.pois ?? []).map(p => ({
+          type: "Feature",
+          geometry: { type: "Point", coordinates: [p.lng, p.lat] },
+          properties: { name: p.name },
+        }))
+        cache.current[key] = features
+      } catch (_) { return }
+    }
+
+    if (!m.getSource(srcId)) {
+      m.addSource(srcId, { type: "geojson", data: { type: "FeatureCollection", features } })
+    }
+    if (!m.getLayer(layerId)) {
+      m.addLayer({
+        id: layerId,
+        type: "circle",
+        source: srcId,
+        paint: {
+          "circle-radius": 5,
+          "circle-color": color,
+          "circle-stroke-width": 1.5,
+          "circle-stroke-color": "#fff",
+          "circle-opacity": 0.88,
+        },
+      })
+    }
+    setActive(prev => new Set([...prev, cat]))
+  }
+
+  return (
+    <div>
+      <p className="section-title">Show on map</p>
+      <div className="layer-toggles">
+        {MAP_LAYERS.map(({ cat, color, label }) => (
+          <button
+            key={cat}
+            className={`layer-btn${active.has(cat) ? " active" : ""}`}
+            onClick={() => toggle(cat, color)}
+          >
+            <span className="layer-dot" style={{ background: color }} />
+            {label}
+          </button>
+        ))}
+      </div>
+    </div>
+  )
+}
+
 function DisclosureFooter({ disclosure }) {
   if (!disclosure) return null
   return (
     <details className="disclosure">
       <summary>Data &amp; methodology</summary>
       <p>{disclosure.note}</p>
+      <dl className="method-grid">
+        <dt>Walk speed</dt>
+        <dd>4.8 km/h (standard) · 3.6 km/h (senior)</dd>
+        <dt>Decay</dt>
+        <dd>Plateau + Gaussian — full score within t_p, zero at t_max</dd>
+        <dt>Scenarios</dt>
+        <dd>Weighted sub-scores → Hazen percentile across 724 sectors</dd>
+        <dt>Limitations</dt>
+        <dd>OSM completeness varies; private facilities not included; hours not modelled</dd>
+      </dl>
       <p className="muted">Source: {disclosure.source} ({disclosure.data_date})</p>
     </details>
   )
@@ -446,6 +550,13 @@ export default function App() {
 
             {/* Pros / cons */}
             <WhyPanel pros={result.pros} cons={result.cons} />
+
+            {/* POI layer toggles */}
+            <MapLayerToggles
+              sectorId={result.sector.id}
+              mapInst={mapInst}
+              mapReady={mapReady}
+            />
 
             {/* Improvements */}
             <ImprovementsList
