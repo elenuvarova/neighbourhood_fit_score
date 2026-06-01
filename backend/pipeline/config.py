@@ -135,6 +135,7 @@ DECAY_PARAMS: dict[str, tuple[int, int, str]] = {
     "restaurant":   (5,  15, "abundance"),
     "library":      (7,  20, "nearest"),
     "sport":        (7,  20, "nearest"),
+    "coworking":    (7,  20, "nearest"),   # work destination (like library); was implicitly (5,20) via fallback
     "hospital":     (0,  30, "nearest"),
 }
 
@@ -164,7 +165,7 @@ SCENARIO_WEIGHTS: dict[str, dict[str, float]] = {
         "park": 14.0, "playground": 4.0,
         "transit": 13.0,
         "cafe": 8.0, "library": 8.0, "restaurant": 4.0,
-        "sport": 4.0, "coworking": 10.0,
+        "sport": 4.0, "coworking": 20.0,   # defining remote-work amenity; brings remote weights to 100
     },
 }
 

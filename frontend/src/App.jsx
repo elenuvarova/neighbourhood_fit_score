@@ -72,7 +72,7 @@ const SCENARIO_WEIGHTS = {
   remote: {
     supermarket: 10, pharmacy: 7, convenience: 3, gp: 5,
     park: 14, playground: 4, transit: 13, cafe: 8,
-    library: 8, restaurant: 4, sport: 4, coworking: 10,
+    library: 8, restaurant: 4, sport: 4, coworking: 20,
   },
 }
 

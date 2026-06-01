@@ -22,6 +22,7 @@ from __future__ import annotations
 
 import csv
 import json
+import os
 import sys
 from pathlib import Path
 
@@ -56,7 +57,7 @@ _WEIGHTS = {
     "remote": {
         "supermarket": 10, "pharmacy": 7, "convenience": 3, "gp": 5,
         "park": 14, "playground": 4, "transit": 13, "cafe": 8,
-        "library": 8, "restaurant": 4, "sport": 4, "coworking": 10,
+        "library": 8, "restaurant": 4, "sport": 4, "coworking": 20,
     },
 }
 
@@ -300,6 +301,28 @@ def _seed_city(session: Session, city: str) -> bool:
     return True
 
 
+def _reseed_scores_improvements(session: Session) -> None:
+    """Force-refresh sector_score + improvement from the committed CSVs.
+
+    Triggered by the RESEED_SCORES env var on deploy. Sectors and POIs are left
+    untouched — only the (small, frequently-recomputed) score tables are rebuilt,
+    so a pipeline re-run can be shipped to an already-seeded DB without wiping it.
+    """
+    from sqlalchemy import text as _text
+    session.execute(_text("DELETE FROM improvement"))
+    session.execute(_text("DELETE FROM sector_score"))
+    session.flush()
+    n_sc = n_imp = 0
+    for city in KNOWN_CITIES:
+        paths = _city_paths(city)
+        if not paths["scores"].exists():
+            continue
+        n_sc  += _seed_scores(session, paths["scores"], paths["narratives"])
+        n_imp += _seed_improvements(session, paths["improvements"])
+        session.flush()
+    print(f"  ↻ refreshed scores: {n_sc}, improvements: {n_imp}")
+
+
 def _migrate(engine) -> None:
     """Apply schema changes that create_all won't handle on existing tables."""
     from sqlalchemy import text as _text
@@ -347,6 +370,12 @@ def main() -> None:
         missing_cats = needed_cats - existing_poi_cats
 
         if existing_sectors and not missing_cats:
+            if os.getenv("RESEED_SCORES"):
+                print("─── RESEED_SCORES set — refreshing scores & improvements ───")
+                _reseed_scores_improvements(session)
+                session.commit()
+                print("  ✓ Done (scores/improvements refreshed)")
+                return
             by_city = {}
             for s in session.exec(select(Sector)).all():
                 by_city[s.city] = by_city.get(s.city, 0) + 1

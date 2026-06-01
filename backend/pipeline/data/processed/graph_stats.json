@@ -1,0 +1,9 @@
+{
+  "nodes": 92950,
+  "edges": 264936,
+  "avg_edge_length_m": 43.9,
+  "walk_speed_default": 1.33,
+  "walk_speed_senior": 1.0,
+  "buffer_m": 2000,
+  "crs_source": "EPSG:31370"
+}
