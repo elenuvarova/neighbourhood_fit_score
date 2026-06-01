@@ -426,12 +426,13 @@ function ImprovementsList({ improvements, onHighlight }) {
 
 // ── POI layer toggles ───────────────────────────────────────────────────────
 
-function MapLayerToggles({ sectorId, mapInst, mapReady }) {
-  const [active, setActive] = useState(new Set())
-  const activeRef = useRef(new Set())
+function MapLayerToggles({ sectorId, mapInst, mapReady, active, onActiveChange }) {
+  const activeRef = useRef(active)
   const cache = useRef({})
 
   useEffect(() => { activeRef.current = active }, [active])
+
+
 
   const _addLayer = useCallback(async (cat, color, sid) => {
     const m = mapInst.current
@@ -486,10 +487,10 @@ function MapLayerToggles({ sectorId, mapInst, mapReady }) {
     if (active.has(cat)) {
       if (m.getLayer(`poi-${cat}`)) m.removeLayer(`poi-${cat}`)
       if (m.getSource(`poi-src-${cat}`)) m.removeSource(`poi-src-${cat}`)
-      setActive(prev => { const s = new Set(prev); s.delete(cat); return s })
+      onActiveChange(prev => { const s = new Set(prev); s.delete(cat); return s })
     } else {
       await _addLayer(cat, color, sectorId)
-      setActive(prev => new Set([...prev, cat]))
+      onActiveChange(prev => new Set([...prev, cat]))
     }
   }
 
@@ -637,6 +638,7 @@ export default function App() {
   const [compareResult, setCompareResult] = useState(null)
   const [compareLoading, setCompareLoading] = useState(false)
   const [filterCatsByScenario, setFilterCatsByScenario] = useState({ family: new Set(), senior: new Set(), remote: new Set() })
+  const [mapActiveLayers, setMapActiveLayers] = useState(new Set())
   const filterCats = filterCatsByScenario[scenario] ?? new Set()
   const [filterMatching, setFilterMatching] = useState(null)
   const [filterMinScore, setFilterMinScore] = useState(60)
@@ -1191,7 +1193,7 @@ export default function App() {
               />
             )}
 
-            <MapLayerToggles sectorId={result.sector.id} mapInst={mapInst} mapReady={mapReady} />
+            <MapLayerToggles sectorId={result.sector.id} mapInst={mapInst} mapReady={mapReady} active={mapActiveLayers} onActiveChange={setMapActiveLayers} />
 
             <ImprovementsList
               improvements={result.improvements}
