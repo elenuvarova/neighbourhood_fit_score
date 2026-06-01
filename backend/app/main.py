@@ -89,32 +89,10 @@ def _find_sector_id(lat: float, lng: float) -> str | None:
 # App lifecycle
 # ---------------------------------------------------------------------------
 
-def _auto_seed():
-    """Seed DB on startup if empty (idempotent — skips if data already present)."""
-    import importlib.util, os, sys
-    seed_path = os.path.join(os.path.dirname(__file__), "..", "seed.py")
-    if not os.path.exists(seed_path):
-        print("seed.py not found — skipping auto-seed")
-        return
-    with Session(engine) as s:
-        if s.exec(select(Sector)).first():
-            return  # already seeded
-    print("db empty — seeding …")
-    try:
-        spec = importlib.util.spec_from_file_location("seed", seed_path)
-        mod  = importlib.util.module_from_spec(spec)
-        spec.loader.exec_module(mod)
-        mod.main()
-        print("auto-seed complete")
-    except Exception as exc:
-        print(f"auto-seed error: {exc}")
-
-
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     SQLModel.metadata.create_all(engine)
     print(f"db: {db_kind}")
-    _auto_seed()
     with Session(engine) as session:
         _build_spatial_index(session)
     n = len(_sector_ids)
