@@ -270,8 +270,23 @@ def _seed_city(session: Session, city: str) -> bool:
     return True
 
 
+def _migrate(engine) -> None:
+    """Apply schema changes that create_all won't handle on existing tables."""
+    from sqlalchemy import text as _text
+    with engine.connect() as conn:
+        conn.execute(_text(
+            "ALTER TABLE sector ADD COLUMN IF NOT EXISTS city TEXT NOT NULL DEFAULT 'brussels'"
+        ))
+        conn.execute(_text(
+            "CREATE INDEX IF NOT EXISTS idx_sector_city ON sector(city)"
+        ))
+        conn.commit()
+    print("  ✓ schema migration OK")
+
+
 def main() -> None:
     SQLModel.metadata.create_all(engine)
+    _migrate(engine)
 
     if not SECTORS_FILE.exists():
         print(f"⚠  {SECTORS_FILE} not found — run the pipeline first, then re-deploy")

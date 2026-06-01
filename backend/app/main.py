@@ -92,15 +92,6 @@ def _find_sector_id(lat: float, lng: float) -> str | None:
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     SQLModel.metadata.create_all(engine)
-    # Migrate: add city column if missing (existing DBs seeded before multi-city support)
-    with engine.connect() as conn:
-        conn.execute(text(
-            "ALTER TABLE sector ADD COLUMN IF NOT EXISTS city TEXT NOT NULL DEFAULT 'brussels'"
-        ))
-        conn.execute(text(
-            "CREATE INDEX IF NOT EXISTS idx_sector_city ON sector(city)"
-        ))
-        conn.commit()
     print(f"db: {db_kind}")
     with Session(engine) as session:
         _build_spatial_index(session)
