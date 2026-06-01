@@ -273,9 +273,17 @@ def _seed_city(session: Session, city: str) -> bool:
 def main() -> None:
     SQLModel.metadata.create_all(engine)
 
+    if not SECTORS_FILE.exists():
+        print(f"⚠  {SECTORS_FILE} not found — run the pipeline first, then re-deploy")
+        return
+
     with Session(engine) as session:
-        existing = session.exec(select(Sector)).first()
-        if existing:
+        existing_sectors = session.exec(select(Sector)).first()
+        existing_map_pois = session.exec(
+            select(Poi).where(Poi.category != "transit")
+        ).first()
+
+        if existing_sectors and existing_map_pois:
             by_city = {}
             for s in session.exec(select(Sector)).all():
                 by_city[s.city] = by_city.get(s.city, 0) + 1
@@ -283,22 +291,25 @@ def main() -> None:
             print(f"✓ DB already seeded ({summary}) — skipping")
             return
 
-    if not SECTORS_FILE.exists():
-        print(f"⚠  {SECTORS_FILE} not found — run the pipeline first, then re-deploy")
-        return
+        print("─── Seeding database ───")
 
-    print("─── Seeding database ───")
-    with Session(engine) as session:
-        seeded = []
-        for city in KNOWN_CITIES:
-            if _seed_city(session, city):
-                seeded.append(city)
+        if not existing_sectors:
+            seeded = []
+            for city in KNOWN_CITIES:
+                if _seed_city(session, city):
+                    seeded.append(city)
+            if seeded:
+                print(f"\n  ✓ Sectors/scores/improvements seeded: {', '.join(seeded)}")
+        else:
+            print("  Sectors already present — skipping sector/score seed")
+
+        if not existing_map_pois:
+            print("  Seeding missing map POIs …")
+            n_p = _seed_pois(session)
+            print(f"  Map POIs: {n_p}")
+
         session.commit()
-
-    if seeded:
-        print(f"\n  ✓ Seed complete: {', '.join(seeded)}")
-    else:
-        print("  ⚠  No data seeded — pipeline files not found")
+        print("  ✓ Done")
 
 
 if __name__ == "__main__":
