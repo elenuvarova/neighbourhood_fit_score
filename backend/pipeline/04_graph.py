@@ -28,13 +28,23 @@ from shapely.ops import transform
 
 sys.path.insert(0, str(Path(__file__).parent))
 from config import (
-    CRS_LAMBERT, CRS_WGS84, DATA_PROCESSED, DATA_RAW,
+    CITY_CONFIG, CRS_LAMBERT, CRS_WGS84, DATA_PROCESSED, DATA_RAW,
     WALK_SPEED_DEFAULT, WALK_SPEED_SENIOR,
 )
 
-SECTORS_PATH = DATA_PROCESSED / "sectors.geojson"
-GRAPH_PATH = DATA_PROCESSED / "brussels_walk.graphml"
-STATS_PATH = DATA_PROCESSED / "graph_stats.json"
+import argparse as _ap
+_p = _ap.ArgumentParser(); _p.add_argument("--city", default="brussels", choices=list(CITY_CONFIG))
+CITY = _p.parse_known_args()[0].city
+
+if CITY == "brussels":
+    SECTORS_PATH = DATA_PROCESSED / "sectors.geojson"
+    GRAPH_PATH   = DATA_PROCESSED / "brussels_walk.graphml"
+    STATS_PATH   = DATA_PROCESSED / "graph_stats.json"
+else:
+    _city_dir    = DATA_PROCESSED / CITY
+    SECTORS_PATH = _city_dir / "sectors.geojson"
+    GRAPH_PATH   = _city_dir / f"{CITY}_walk.graphml"
+    STATS_PATH   = _city_dir / "graph_stats.json"
 
 
 def build_brussels_polygon(buffer_m: float = 2000.0):
@@ -67,7 +77,7 @@ def build_brussels_polygon(buffer_m: float = 2000.0):
 
 
 def main() -> None:
-    DATA_PROCESSED.mkdir(parents=True, exist_ok=True)
+    GRAPH_PATH.parent.mkdir(parents=True, exist_ok=True)
 
     if GRAPH_PATH.exists():
         print(f"  ✓ {GRAPH_PATH.name} already exists — delete to regenerate")
@@ -83,7 +93,7 @@ def main() -> None:
     ox.settings.cache_folder = str(cache_dir)
     ox.settings.log_console = False
 
-    print("─── Building Brussels boundary ───")
+    print(f"─── Building {CITY} boundary ───")
     polygon_wgs84 = build_brussels_polygon(buffer_m=2000.0)
 
     print("\n─── Downloading walking network from Overpass API ───")
@@ -131,8 +141,8 @@ def main() -> None:
     STATS_PATH.write_text(json.dumps(stats, indent=2))
     print(f"  ✓ Stats written to {STATS_PATH.name}")
 
-    print("\nWeek 1 complete!")
-    print("Next: python 05_score.py  (Week 2 — Family scenario scoring)")
+    print("\nNext steps complete!")
+    print(f"Next: python 05_score.py --city {CITY}")
 
 
 if __name__ == "__main__":

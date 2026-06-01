@@ -11,10 +11,12 @@ Used as Render preDeployCommand:
   cd /app/backend && python seed.py
 
 Seed files expected at:
-  pipeline/data/processed/sectors.geojson
+  pipeline/data/processed/sectors.geojson          (Brussels)
   pipeline/data/processed/scores.csv
   pipeline/data/processed/improvements.csv   (optional)
   pipeline/data/processed/transit_stops.geojson  (optional)
+  pipeline/data/processed/antwerp/sectors.geojson  (Antwerp, when available)
+  pipeline/data/processed/antwerp/scores.csv
 """
 from __future__ import annotations
 
@@ -81,8 +83,8 @@ def _pros_cons(breakdown: dict, scenario: str) -> tuple[list, list]:
     return pros, cons
 
 
-def _seed_sectors(session: Session) -> int:
-    with open(SECTORS_FILE) as f:
+def _seed_sectors(session: Session, sectors_file: Path, city: str = "brussels") -> int:
+    with open(sectors_file) as f:
         gj = json.load(f)
     records = []
     for feat in gj["features"]:
@@ -91,6 +93,7 @@ def _seed_sectors(session: Session) -> int:
         c = geom.centroid
         records.append(Sector(
             id=str(p["id"]),
+            city=city,
             name_fr=p.get("name_fr"),
             name_nl=p.get("name_nl"),
             cd_munty_refnis=str(p.get("cd_munty_refnis") or ""),
@@ -104,11 +107,12 @@ def _seed_sectors(session: Session) -> int:
     return len(records)
 
 
-def _load_narratives() -> dict[tuple[str, str], tuple[str, list]]:
+def _load_narratives(narratives_file: Path | None = None) -> dict[tuple[str, str], tuple[str, list]]:
     out: dict[tuple[str, str], tuple[str, list]] = {}
-    if not NARRATIVES_FILE.exists():
+    path = narratives_file or NARRATIVES_FILE
+    if not path.exists():
         return out
-    with open(NARRATIVES_FILE, newline="", encoding="utf-8") as f:
+    with open(path, newline="", encoding="utf-8") as f:
         for row in csv.DictReader(f):
             key = (row["sector_id"], row["scenario"])
             highlights = json.loads(row["highlights_json"]) if row.get("highlights_json") else []
@@ -116,12 +120,12 @@ def _load_narratives() -> dict[tuple[str, str], tuple[str, list]]:
     return out
 
 
-def _seed_scores(session: Session) -> int:
-    narratives = _load_narratives()
+def _seed_scores(session: Session, scores_file: Path, narratives_file: Path | None = None) -> int:
+    narratives = _load_narratives(narratives_file)
     if narratives:
         print(f"  Narratives loaded: {len(narratives)}")
     records = []
-    with open(SCORES_FILE, newline="", encoding="utf-8") as f:
+    with open(scores_file, newline="", encoding="utf-8") as f:
         for row in csv.DictReader(f):
             breakdown = json.loads(row["breakdown"])
             pros, cons = _pros_cons(breakdown, row["scenario"])
@@ -142,11 +146,12 @@ def _seed_scores(session: Session) -> int:
     return len(records)
 
 
-def _seed_improvements(session: Session) -> int:
-    if not IMPS_FILE.exists():
+def _seed_improvements(session: Session, imps_file: Path | None = None) -> int:
+    path = imps_file or IMPS_FILE
+    if not path.exists():
         return 0
     records = []
-    with open(IMPS_FILE, newline="", encoding="utf-8") as f:
+    with open(path, newline="", encoding="utf-8") as f:
         for row in csv.DictReader(f):
             records.append(Improvement(
                 sector_id=row["sector_id"],
@@ -167,10 +172,11 @@ def _seed_improvements(session: Session) -> int:
     return len(records)
 
 
-def _seed_transit(session: Session) -> int:
-    if not TRANSIT_FILE.exists():
+def _seed_transit(session: Session, transit_file: Path | None = None) -> int:
+    path = transit_file or TRANSIT_FILE
+    if not path.exists():
         return 0
-    with open(TRANSIT_FILE) as f:
+    with open(path) as f:
         gj = json.load(f)
     records = []
     for feat in gj["features"]:
@@ -192,14 +198,57 @@ def _seed_transit(session: Session) -> int:
     return len(records)
 
 
+def _city_paths(city: str) -> dict:
+    """Return file paths for a given city. Brussels uses flat dir; others use subdir."""
+    if city == "brussels":
+        base = PROCESSED
+    else:
+        base = PROCESSED / city
+    return {
+        "sectors":    base / "sectors.geojson",
+        "scores":     base / "scores.csv",
+        "improvements": base / "improvements.csv",
+        "narratives": base / "narratives.csv",
+        "transit":    base / "transit_stops.geojson",
+    }
+
+
+KNOWN_CITIES = ["brussels", "antwerp"]
+
+
+def _seed_city(session: Session, city: str) -> bool:
+    """Seed one city's data. Returns True if seeded, False if files not found."""
+    paths = _city_paths(city)
+    if not paths["sectors"].exists():
+        return False
+    print(f"\n  ── {city.title()} ──")
+    n_s = _seed_sectors(session, paths["sectors"], city=city)
+    session.flush()
+    print(f"  Sectors:       {n_s}")
+
+    n_sc = _seed_scores(session, paths["scores"], paths["narratives"])
+    session.flush()
+    print(f"  Scores:        {n_sc}")
+
+    n_i = _seed_improvements(session, paths["improvements"])
+    print(f"  Improvements:  {n_i}")
+
+    n_t = _seed_transit(session, paths["transit"])
+    print(f"  Transit stops: {n_t}")
+    return True
+
+
 def main() -> None:
     SQLModel.metadata.create_all(engine)
 
     with Session(engine) as session:
         existing = session.exec(select(Sector)).first()
         if existing:
-            n = len(session.exec(select(Sector)).all())
-            print(f"✓ DB already seeded ({n} sectors) — skipping")
+            by_city = {}
+            for s in session.exec(select(Sector)).all():
+                by_city[s.city] = by_city.get(s.city, 0) + 1
+            summary = ", ".join(f"{c}: {n}" for c, n in sorted(by_city.items()))
+            print(f"✓ DB already seeded ({summary}) — skipping")
             return
 
     if not SECTORS_FILE.exists():
@@ -208,23 +257,16 @@ def main() -> None:
 
     print("─── Seeding database ───")
     with Session(engine) as session:
-        n_s = _seed_sectors(session)
-        session.flush()  # sectors must be visible before FK-referencing tables
-        print(f"  Sectors:       {n_s}")
-
-        n_sc = _seed_scores(session)
-        session.flush()
-        print(f"  Scores:        {n_sc}")
-
-        n_i = _seed_improvements(session)
-        print(f"  Improvements:  {n_i}")
-
-        n_t = _seed_transit(session)
-        print(f"  Transit stops: {n_t}")
-
+        seeded = []
+        for city in KNOWN_CITIES:
+            if _seed_city(session, city):
+                seeded.append(city)
         session.commit()
 
-    print("  ✓ Seed complete")
+    if seeded:
+        print(f"\n  ✓ Seed complete: {', '.join(seeded)}")
+    else:
+        print("  ⚠  No data seeded — pipeline files not found")
 
 
 if __name__ == "__main__":

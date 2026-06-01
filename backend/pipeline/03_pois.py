@@ -37,18 +37,31 @@ from shapely.geometry import shape
 
 sys.path.insert(0, str(Path(__file__).parent))
 from config import (
-    BRUSSELS_BBOX, CRS_LAMBERT, CRS_WGS84,
+    CITY_CONFIG, CRS_LAMBERT, CRS_WGS84,
     DATA_PROCESSED, DATA_RAW,
     LOW_CONFIDENCE_CATEGORIES, OSM_CATEGORY_TAGS, PARK_MIN_HA,
 )
 
-PBF_BELGIUM = DATA_RAW / "belgium-latest.osm.pbf"
-PBF_BRUSSELS = DATA_RAW / "brussels.osm.pbf"
-GEOJSON_POIS = DATA_RAW / "brussels_pois.geojson"
-SECTORS_PATH = DATA_PROCESSED / "sectors.geojson"
-OUT_POIS = DATA_PROCESSED / "pois_all.geojson"
-OUT_AMENITIES = DATA_PROCESSED / "sector_amenities.csv"
-OUT_TRANSIT = DATA_PROCESSED / "transit_stops.geojson"
+import argparse as _ap
+_p = _ap.ArgumentParser(); _p.add_argument("--city", default="brussels", choices=list(CITY_CONFIG))
+CITY = _p.parse_known_args()[0].city
+CITY_BBOX = CITY_CONFIG[CITY]["bbox"]
+
+PBF_BELGIUM  = DATA_RAW / "belgium-latest.osm.pbf"
+PBF_CITY     = DATA_RAW / f"{CITY}.osm.pbf"
+GEOJSON_POIS = DATA_RAW / f"{CITY}_pois.geojson"
+
+if CITY == "brussels":
+    SECTORS_PATH  = DATA_PROCESSED / "sectors.geojson"
+    OUT_POIS      = DATA_PROCESSED / "pois_all.geojson"
+    OUT_AMENITIES = DATA_PROCESSED / "sector_amenities.csv"
+    OUT_TRANSIT   = DATA_PROCESSED / "transit_stops.geojson"
+else:
+    _city_dir     = DATA_PROCESSED / CITY
+    SECTORS_PATH  = _city_dir / "sectors.geojson"
+    OUT_POIS      = _city_dir / "pois_all.geojson"
+    OUT_AMENITIES = _city_dir / "sector_amenities.csv"
+    OUT_TRANSIT   = _city_dir / "transit_stops.geojson"
 
 
 # ---------------------------------------------------------------------------
@@ -112,17 +125,17 @@ def _run(cmd: list[str], desc: str) -> None:
 
 
 def extract_brussels(osmium: str) -> None:
-    if PBF_BRUSSELS.exists():
-        print(f"  ✓ {PBF_BRUSSELS.name} already exists")
+    if PBF_CITY.exists():
+        print(f"  ✓ {PBF_CITY.name} already exists")
         return
-    bbox_str = f"{BRUSSELS_BBOX[0]},{BRUSSELS_BBOX[1]},{BRUSSELS_BBOX[2]},{BRUSSELS_BBOX[3]}"
+    bbox_str = f"{CITY_BBOX[0]},{CITY_BBOX[1]},{CITY_BBOX[2]},{CITY_BBOX[3]}"
     _run(
         [osmium, "extract", "-b", bbox_str,
-         str(PBF_BELGIUM), "-o", str(PBF_BRUSSELS), "--overwrite"],
-        f"Extracting Brussels bbox {bbox_str} from Belgium PBF …"
+         str(PBF_BELGIUM), "-o", str(PBF_CITY), "--overwrite"],
+        f"Extracting {CITY} bbox {bbox_str} from Belgium PBF …"
     )
-    size_mb = PBF_BRUSSELS.stat().st_size / 1_048_576
-    print(f"    ✓ brussels.osm.pbf  ({size_mb:.1f} MB)")
+    size_mb = PBF_CITY.stat().st_size / 1_048_576
+    print(f"    ✓ {PBF_CITY.name}  ({size_mb:.1f} MB)")
 
 
 def export_geojson(osmium: str) -> None:
@@ -145,15 +158,15 @@ def export_geojson(osmium: str) -> None:
         exprs.append(f"nwr/{k}={','.join(sorted(vals))}")
 
     # osmium tags-filter to a temp file, then export
-    filtered_pbf = DATA_RAW / "brussels_pois.osm.pbf"
+    filtered_pbf = DATA_RAW / f"{CITY}_pois.osm.pbf"
     if not filtered_pbf.exists():
         _run(
-            [osmium, "tags-filter", str(PBF_BRUSSELS),
+            [osmium, "tags-filter", str(PBF_CITY),
              *exprs, "-o", str(filtered_pbf), "--overwrite"],
-            "Filtering POI tags from Brussels PBF …"
+            f"Filtering POI tags from {CITY} PBF …"
         )
         size_mb = filtered_pbf.stat().st_size / 1_048_576
-        print(f"    ✓ brussels_pois.osm.pbf  ({size_mb:.1f} MB)")
+        print(f"    ✓ {filtered_pbf.name}  ({size_mb:.1f} MB)")
 
     _run(
         [osmium, "export", str(filtered_pbf),
@@ -163,7 +176,7 @@ def export_geojson(osmium: str) -> None:
         "Exporting POIs to GeoJSON …"
     )
     size_mb = GEOJSON_POIS.stat().st_size / 1_048_576
-    print(f"    ✓ brussels_pois.geojson  ({size_mb:.1f} MB)")
+    print(f"    ✓ {GEOJSON_POIS.name}  ({size_mb:.1f} MB)")
 
 
 # ---------------------------------------------------------------------------
@@ -339,7 +352,7 @@ def _compute_frequency(stop_times_path, trips_path, calendar_path) -> pd.DataFra
 # ---------------------------------------------------------------------------
 
 def main() -> None:
-    DATA_PROCESSED.mkdir(parents=True, exist_ok=True)
+    OUT_POIS.parent.mkdir(parents=True, exist_ok=True)
 
     if OUT_POIS.exists() and OUT_AMENITIES.exists():
         print(f"  ✓ {OUT_POIS.name} already exists — delete to regenerate")
@@ -349,12 +362,12 @@ def main() -> None:
         raise FileNotFoundError(f"PBF not found: {PBF_BELGIUM}\nRun: python 01_download.py")
 
     if not SECTORS_PATH.exists():
-        raise FileNotFoundError("sectors.geojson missing — run 02_sectors.py first")
+        raise FileNotFoundError(f"sectors.geojson missing — run: python 02_sectors.py --city {CITY}")
 
     osmium = _require_osmium()
-    print(f"  osmium: {osmium}")
+    print(f"  osmium: {osmium}  city: {CITY}")
 
-    print("\n─── Step 1: Extract Brussels from Belgium PBF ───")
+    print(f"\n─── Step 1: Extract {CITY} from Belgium PBF ───")
     extract_brussels(osmium)
 
     print("\n─── Step 2: Export POIs to GeoJSON ───")
@@ -375,19 +388,20 @@ def main() -> None:
     keep = [c for c in ["category", "sector_id", "name", "name:fr", "name:nl", "area_m2", "geometry"]
             if c in pois.columns]
     pois[keep].to_file(OUT_POIS, driver="GeoJSON")
-    print(f"\n  ✓ {len(pois):,} POIs → {OUT_POIS.name}")
+    print(f"\n  ✓ {len(pois):,} POIs → {OUT_POIS}")
 
     amenity_table = build_amenity_table(pois)
     amenity_table.to_csv(OUT_AMENITIES, index=False)
-    print(f"  ✓ {OUT_AMENITIES.name}: {len(amenity_table)} sectors × {len(amenity_table.columns) - 1} categories")
+    print(f"  ✓ Amenity table: {len(amenity_table)} sectors × {len(amenity_table.columns) - 1} categories")
 
-    print("\n─── Step 5: STIB GTFS transit ───")
+    transit_type = CITY_CONFIG[CITY]["transit"]
+    print(f"\n─── Step 5: {transit_type.upper()} transit ───")
     transit = process_stib_gtfs()
     if transit is not None:
         transit.to_file(OUT_TRANSIT, driver="GeoJSON")
         print(f"  ✓ {len(transit):,} transit stops → {OUT_TRANSIT.name}")
 
-    print("\nNext: python 04_graph.py")
+    print(f"\nNext: python 04_graph.py --city {CITY}")
 
 
 if __name__ == "__main__":

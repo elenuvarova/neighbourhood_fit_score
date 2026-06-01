@@ -36,17 +36,30 @@ import pandas as pd
 
 sys.path.insert(0, str(Path(__file__).parent))
 from config import (
-    CRS_LAMBERT, CRS_WGS84,
+    CITY_CONFIG, CRS_LAMBERT, CRS_WGS84,
     DATA_PROCESSED,
     DECAY_PARAMS, SCENARIO_WEIGHTS,
 )
 
-SECTORS_PATH = DATA_PROCESSED / "sectors.geojson"
-POIS_PATH    = DATA_PROCESSED / "pois_all.geojson"
-TRANSIT_PATH = DATA_PROCESSED / "transit_stops.geojson"
-GRAPH_PATH   = DATA_PROCESSED / "brussels_walk.graphml"
-OUT_SCORES   = DATA_PROCESSED / "scores.csv"
-OUT_WIDE     = DATA_PROCESSED / "scores_wide.csv"
+import argparse as _ap
+_p = _ap.ArgumentParser(); _p.add_argument("--city", default="brussels", choices=list(CITY_CONFIG))
+CITY = _p.parse_known_args()[0].city
+
+if CITY == "brussels":
+    SECTORS_PATH = DATA_PROCESSED / "sectors.geojson"
+    POIS_PATH    = DATA_PROCESSED / "pois_all.geojson"
+    TRANSIT_PATH = DATA_PROCESSED / "transit_stops.geojson"
+    GRAPH_PATH   = DATA_PROCESSED / "brussels_walk.graphml"
+    OUT_SCORES   = DATA_PROCESSED / "scores.csv"
+    OUT_WIDE     = DATA_PROCESSED / "scores_wide.csv"
+else:
+    _city_dir    = DATA_PROCESSED / CITY
+    SECTORS_PATH = _city_dir / "sectors.geojson"
+    POIS_PATH    = _city_dir / "pois_all.geojson"
+    TRANSIT_PATH = _city_dir / "transit_stops.geojson"
+    GRAPH_PATH   = _city_dir / f"{CITY}_walk.graphml"
+    OUT_SCORES   = _city_dir / "scores.csv"
+    OUT_WIDE     = _city_dir / "scores_wide.csv"
 
 # 12 departures in the 2-hour peak window (7–9 h) = every 10 min = "good" service
 TRANSIT_FREQ_BASELINE = 12

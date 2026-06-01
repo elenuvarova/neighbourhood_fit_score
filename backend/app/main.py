@@ -133,8 +133,9 @@ def hello():
 
 @app.get("/api/score")
 def score_by_address(
-    address: str = Query(..., description="Street address in Brussels"),
+    address: str = Query(..., description="Street address"),
     scenario: str = Query("family", description="family | senior | remote"),
+    city: str = Query("brussels"),
     db: Session = Depends(get_session),
 ):
     lat, lng = geocode(address, db)
@@ -145,8 +146,8 @@ def score_by_address(
     if sector_id is None:
         raise HTTPException(
             404,
-            detail=f"No Brussels sector found for ({lat:.4f}, {lng:.4f}). "
-                   "Check that the address is within Brussels municipality.",
+            detail=f"No sector found for ({lat:.4f}, {lng:.4f}) in {city}. "
+                   "Check that the address is within the city.",
         )
 
     return _sector_score_response(sector_id, scenario, {"lat": lat, "lng": lng}, db)
@@ -433,14 +434,17 @@ async def explain(body: ExplainRequest, db: Session = Depends(get_session)):
 @app.get("/api/sectors.geojson")
 def sectors_geojson(
     scenario: str = Query("family"),
+    city: str = Query("brussels"),
     db: Session = Depends(get_session),
 ):
-    sectors = db.exec(select(Sector)).all()
+    sectors = db.exec(select(Sector).where(Sector.city == city)).all()
+    sector_ids = {s.id for s in sectors}
     scores_by_sector = {
         row.sector_id: row
         for row in db.exec(
             select(SectorScore).where(SectorScore.scenario == scenario)
         ).all()
+        if row.sector_id in sector_ids
     }
 
     features = []
@@ -504,18 +508,23 @@ def filter_sectors(
     scenario: str = Query("family"),
     categories: str = Query(..., description="Comma-separated category names"),
     min_score: int = Query(60, ge=0, le=100),
+    city: str = Query("brussels"),
     db: Session = Depends(get_session),
 ):
     cats = [c.strip() for c in categories.split(",") if c.strip()]
     if not cats:
         raise HTTPException(400, detail="At least one category required")
     threshold = min_score / 100.0
+    city_sector_ids = {
+        s.id for s in db.exec(select(Sector).where(Sector.city == city)).all()
+    }
     scores = db.exec(
         select(SectorScore).where(SectorScore.scenario == scenario)
     ).all()
     matching = [
         row.sector_id for row in scores
-        if row.breakdown and all(
+        if row.sector_id in city_sector_ids
+        and row.breakdown and all(
             float(row.breakdown.get(cat, 0)) >= threshold for cat in cats
         )
     ]

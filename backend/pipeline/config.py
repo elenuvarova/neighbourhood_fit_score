@@ -9,14 +9,26 @@ DATA_RAW = PIPELINE_DIR / "data" / "raw"
 DATA_PROCESSED = PIPELINE_DIR / "data" / "processed"
 
 # ---------------------------------------------------------------------------
-# Brussels geography
+# Multi-city configuration
 # ---------------------------------------------------------------------------
-# All 19 Brussels communes (CD_MUNTY_REFNIS range)
-BRUSSELS_REFNIS = set(range(21001, 21020))
+CITY_CONFIG: dict = {
+    "brussels": {
+        "refnis": set(range(21001, 21020)),   # 19 BCR communes
+        "bbox": (4.23, 50.77, 4.50, 50.93),  # WGS84 lon_min,lat_min,lon_max,lat_max
+        "transit": "stib",                    # STIB GTFS
+        "expected_sectors": 724,
+    },
+    "antwerp": {
+        "refnis": {11002},                    # Stad Antwerpen commune
+        "bbox": (4.28, 51.13, 4.53, 51.30),
+        "transit": "delijn",                  # De Lijn GTFS
+        "expected_sectors": 400,              # approximate
+    },
+}
 
-# WGS84 bounding box: Brussels + ~2 km buffer
-# (lon_min, lat_min, lon_max, lat_max)
-BRUSSELS_BBOX = (4.23, 50.77, 4.50, 50.93)
+# Backward-compat aliases
+BRUSSELS_REFNIS = CITY_CONFIG["brussels"]["refnis"]
+BRUSSELS_BBOX   = CITY_CONFIG["brussels"]["bbox"]
 
 # CRS identifiers
 CRS_LAMBERT = "EPSG:31370"   # Belgian Lambert 72 — native Statbel CRS

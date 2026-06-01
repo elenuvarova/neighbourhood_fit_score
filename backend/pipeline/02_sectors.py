@@ -1,16 +1,19 @@
 """
-Load Statbel statistical sectors (2024) for Brussels Capital Region.
+Load Statbel statistical sectors (2024) for a city.
 Join population data. Output GeoJSON in WGS84.
 
 Output:
-  data/processed/sectors.geojson   (724 sectors, EPSG:4326)
+  data/processed/sectors.geojson          (Brussels, backward compat)
+  data/processed/<city>/sectors.geojson   (other cities)
 
 Run:
   cd backend/pipeline
-  python 02_sectors.py
+  python 02_sectors.py               # Brussels (default)
+  python 02_sectors.py --city antwerp
 """
 from __future__ import annotations
 
+import argparse
 import sys
 import zipfile
 from pathlib import Path
@@ -20,11 +23,22 @@ import pandas as pd
 
 sys.path.insert(0, str(Path(__file__).parent))
 from config import (
-    BRUSSELS_REFNIS, CRS_LAMBERT, CRS_WGS84,
+    CITY_CONFIG, CRS_LAMBERT, CRS_WGS84,
     DATA_PROCESSED, DATA_RAW,
 )
 
-OUT = DATA_PROCESSED / "sectors.geojson"
+_PARSER = argparse.ArgumentParser()
+_PARSER.add_argument("--city", default="brussels", choices=list(CITY_CONFIG))
+_ARGS, _ = _PARSER.parse_known_args()
+CITY = _ARGS.city
+CITY_REFNIS = CITY_CONFIG[CITY]["refnis"]
+EXPECTED = CITY_CONFIG[CITY]["expected_sectors"]
+
+# Brussels keeps flat location for backward compat; others get a subdir
+if CITY == "brussels":
+    OUT = DATA_PROCESSED / "sectors.geojson"
+else:
+    OUT = DATA_PROCESSED / CITY / "sectors.geojson"
 
 
 # ---------------------------------------------------------------------------
@@ -79,8 +93,8 @@ def load_sectors() -> gpd.GeoDataFrame:
         )
 
     gdf["_refnis_int"] = pd.to_numeric(gdf[munty_col], errors="coerce").astype("Int64")
-    brussels = gdf[gdf["_refnis_int"].isin(BRUSSELS_REFNIS)].drop(columns=["_refnis_int"]).copy()
-    print(f"  Brussels sectors: {len(brussels):,}  (expected 724)")
+    brussels = gdf[gdf["_refnis_int"].isin(CITY_REFNIS)].drop(columns=["_refnis_int"]).copy()
+    print(f"  {CITY.title()} sectors: {len(brussels):,}  (expected ~{EXPECTED})")
 
     if brussels.crs is None:
         brussels = brussels.set_crs(CRS_LAMBERT)
@@ -191,14 +205,14 @@ def join_population(sectors: gpd.GeoDataFrame) -> gpd.GeoDataFrame:
 # ---------------------------------------------------------------------------
 
 def main() -> None:
-    DATA_PROCESSED.mkdir(parents=True, exist_ok=True)
+    OUT.parent.mkdir(parents=True, exist_ok=True)
 
     if OUT.exists():
         print(f"  ✓ {OUT.name} already exists — delete to regenerate")
         _print_stats()
         return
 
-    print("─── Loading sector boundaries ───")
+    print(f"─── Loading sector boundaries ({CITY}) ───")
     sectors = load_sectors()
 
     print("\n─── Joining population ───")
@@ -216,7 +230,6 @@ def main() -> None:
     present = {k: v for k, v in col_map.items() if k in sectors.columns}
     sectors = sectors.rename(columns=present)
 
-    # Ensure 'id' exists (mapped from 'cd_sector')
     if "id" not in sectors.columns:
         raise RuntimeError(
             "Column 'cd_sector' not found in Statbel file.\n"
@@ -230,17 +243,16 @@ def main() -> None:
     sectors["centroid_lon"] = centroids.x.round(6)
     sectors["centroid_lat"] = centroids.y.round(6)
 
-    # Keep only documented columns + geometry
     keep = [c for c in ["id", "name_fr", "name_nl", "cd_munty_refnis",
                         "area_ha", "population", "centroid_lon", "centroid_lat"] if c in sectors.columns]
     sectors = sectors[keep + ["geometry"]]
 
-    print(f"\n─── Saving {OUT.name} ───")
+    print(f"\n─── Saving {OUT} ───")
     sectors.to_file(OUT, driver="GeoJSON")
     print(f"  ✓ {len(sectors)} sectors written")
 
     _print_stats()
-    print("\nNext: python 03_pois.py")
+    print(f"\nNext: python 03_pois.py --city {CITY}")
 
 
 def _print_stats() -> None:

@@ -686,6 +686,7 @@ export default function App() {
     setCompareAddr("")
     setFilterCats(new Set())
     setFilterMatching(null)
+    setSectorsGeo(null)
     const m = mapInst.current
     if (m) m.flyTo({ center: cityConfig.center, zoom: cityConfig.zoom, duration: 1200 })
   }, [])
@@ -708,16 +709,17 @@ export default function App() {
   }, [])
 
   // ── Load sectors GeoJSON ────────────────────────────────────────────────
-  const loadSectorsGeo = useCallback(async (scen) => {
-    if (geoCache.current[scen]) { setSectorsGeo(geoCache.current[scen]); return }
+  const loadSectorsGeo = useCallback(async (scen, cty) => {
+    const key = `${cty}:${scen}`
+    if (geoCache.current[key]) { setSectorsGeo(geoCache.current[key]); return }
     try {
-      const data = await fetch(`${API}/api/sectors.geojson?scenario=${scen}`).then(r => r.json())
-      geoCache.current[scen] = data
+      const data = await fetch(`${API}/api/sectors.geojson?scenario=${scen}&city=${cty}`).then(r => r.json())
+      geoCache.current[key] = data
       setSectorsGeo(data)
     } catch (_) {}
   }, [])
 
-  useEffect(() => { loadSectorsGeo(scenario) }, [scenario, loadSectorsGeo])
+  useEffect(() => { loadSectorsGeo(scenario, city) }, [scenario, city, loadSectorsGeo])
 
   // ── Add / update sectors layer ──────────────────────────────────────────
   useEffect(() => {
@@ -836,12 +838,12 @@ export default function App() {
     setFilterMatching(null) // reset while loading new results
     let cancelled = false
     const cats = [...filterCats].join(",")
-    fetch(`${API}/api/filter?scenario=${scenario}&categories=${cats}&min_score=${filterMinScore}`)
+    fetch(`${API}/api/filter?scenario=${scenario}&categories=${cats}&min_score=${filterMinScore}&city=${city}`)
       .then(r => r.json())
       .then(data => { if (!cancelled) setFilterMatching(data.matching) })
       .catch(() => { if (!cancelled) setFilterMatching([]) })
     return () => { cancelled = true }
-  }, [filterCats, scenario, filterMinScore])
+  }, [filterCats, scenario, filterMinScore, city])
 
   // ── Highlight selected sector ───────────────────────────────────────────
   useEffect(() => {
@@ -954,7 +956,7 @@ export default function App() {
     setError(null)
     try {
       const r = await fetch(
-        `${API}/api/score?address=${encodeURIComponent(addr)}&scenario=${scenario}`
+        `${API}/api/score?address=${encodeURIComponent(addr)}&scenario=${scenario}&city=${city}`
       )
       if (!r.ok) throw new Error(await r.json().then(d => d.detail).catch(() => r.statusText))
       setResult(await r.json())
@@ -988,7 +990,7 @@ export default function App() {
     setError(null)
     try {
       const geo = await fetch(
-        `${API}/api/score?address=${encodeURIComponent(addr)}&scenario=${scenario}`
+        `${API}/api/score?address=${encodeURIComponent(addr)}&scenario=${scenario}&city=${city}`
       )
       if (!geo.ok) throw new Error(await geo.json().then(d => d.detail).catch(() => geo.statusText))
       const geoData = await geo.json()

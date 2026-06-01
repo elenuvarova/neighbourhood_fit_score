@@ -4,8 +4,9 @@ from sqlmodel import Field, SQLModel
 
 
 class Sector(SQLModel, table=True):
-    """One Brussels statistical sector (Statbel CD_SECTOR)."""
+    """One statistical sector (Statbel CD_SECTOR)."""
     id: str = Field(primary_key=True)        # CD_SECTOR
+    city: str = Field(default="brussels", index=True)
     name_fr: Optional[str] = None
     name_nl: Optional[str] = None
     cd_munty_refnis: Optional[str] = None    # municipality NIS code

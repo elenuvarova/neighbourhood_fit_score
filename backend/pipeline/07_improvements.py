@@ -33,15 +33,25 @@ import pandas as pd
 
 sys.path.insert(0, str(Path(__file__).parent))
 from config import (
-    CRS_LAMBERT, CRS_WGS84,
+    CITY_CONFIG, CRS_LAMBERT, CRS_WGS84,
     DATA_PROCESSED,
     DECAY_PARAMS, SCENARIO_WEIGHTS,
     WALK_SPEED_DEFAULT, WALK_SPEED_SENIOR,
 )
 
-SECTORS_PATH = DATA_PROCESSED / "sectors.geojson"
-SCORES_PATH  = DATA_PROCESSED / "scores.csv"
-OUT          = DATA_PROCESSED / "improvements.csv"
+import argparse as _ap
+_p = _ap.ArgumentParser(); _p.add_argument("--city", default="brussels", choices=list(CITY_CONFIG))
+CITY = _p.parse_known_args()[0].city
+
+if CITY == "brussels":
+    SECTORS_PATH = DATA_PROCESSED / "sectors.geojson"
+    SCORES_PATH  = DATA_PROCESSED / "scores.csv"
+    OUT          = DATA_PROCESSED / "improvements.csv"
+else:
+    _city_dir    = DATA_PROCESSED / CITY
+    SECTORS_PATH = _city_dir / "sectors.geojson"
+    SCORES_PATH  = _city_dir / "scores.csv"
+    OUT          = _city_dir / "improvements.csv"
 
 CATEGORY_LABELS: dict[str, str] = {
     "school": "school",         "childcare": "childcare centre",
