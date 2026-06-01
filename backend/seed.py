@@ -199,6 +199,36 @@ def _seed_transit(session: Session, transit_file: Path | None = None) -> int:
     return len(records)
 
 
+def _seed_pois_categories(session: Session, categories: set[str], pois_file: Path | None = None) -> int:
+    """Seed only the specified POI categories from pois_map.geojson."""
+    path = pois_file or POIS_MAP_FILE
+    if not path.exists():
+        return 0
+    with open(path) as f:
+        gj = json.load(f)
+    records = []
+    for feat in gj["features"]:
+        if feat.get("geometry") is None:
+            continue
+        p = feat.get("properties", {})
+        cat = p.get("category", "")
+        if cat not in categories:
+            continue
+        coords = feat["geometry"]["coordinates"]
+        records.append(Poi(
+            sector_id=str(p["sector_id"]) if p.get("sector_id") else None,
+            category=cat,
+            name=p.get("name") or p.get("name:fr") or p.get("name:nl") or None,
+            lat=round(float(coords[1]), 6),
+            lng=round(float(coords[0]), 6),
+        ))
+    BATCH = 500
+    for i in range(0, len(records), BATCH):
+        session.add_all(records[i : i + BATCH])
+        session.flush()
+    return len(records)
+
+
 def _seed_pois(session: Session, pois_file: Path | None = None) -> int:
     """Seed map-visible POIs (school/park/pharmacy/cafe/sport) from pois_map.geojson."""
     path = pois_file or POIS_MAP_FILE
@@ -294,11 +324,29 @@ def main() -> None:
 
     with Session(engine) as session:
         existing_sectors = session.exec(select(Sector)).first()
-        existing_map_pois = session.exec(
-            select(Poi).where(Poi.category != "transit")
-        ).first()
 
-        if existing_sectors and existing_map_pois:
+        # Determine which non-transit POI categories are already in the DB
+        from sqlalchemy import text as _text2
+        existing_cats_rows = session.exec(
+            select(Poi.category).where(Poi.category != "transit").distinct()
+        ).all()
+        existing_poi_cats = set(existing_cats_rows)
+
+        # Determine which categories are present in pois_map.geojson
+        needed_cats: set[str] = set()
+        if POIS_MAP_FILE.exists():
+            import json as _json
+            with open(POIS_MAP_FILE) as _f:
+                _gj = _json.load(_f)
+            needed_cats = {
+                feat["properties"].get("category", "")
+                for feat in _gj["features"]
+                if feat.get("geometry") and feat["properties"].get("category")
+            }
+
+        missing_cats = needed_cats - existing_poi_cats
+
+        if existing_sectors and not missing_cats:
             by_city = {}
             for s in session.exec(select(Sector)).all():
                 by_city[s.city] = by_city.get(s.city, 0) + 1
@@ -318,8 +366,12 @@ def main() -> None:
         else:
             print("  Sectors already present — skipping sector/score seed")
 
-        if not existing_map_pois:
-            print("  Seeding missing map POIs …")
+        if missing_cats:
+            print(f"  Seeding missing POI categories: {', '.join(sorted(missing_cats))} …")
+            n_p = _seed_pois_categories(session, missing_cats)
+            print(f"  POIs added: {n_p}")
+        elif not existing_poi_cats:
+            print("  Seeding map POIs …")
             n_p = _seed_pois(session)
             print(f"  Map POIs: {n_p}")
 
