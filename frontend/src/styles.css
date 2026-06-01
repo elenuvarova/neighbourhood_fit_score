@@ -1072,9 +1072,7 @@ body {
 }
 
 .imp-popup {
-  white-space: normal;
-  max-width: 200px;
-  line-height: 1.5;
+  white-space: nowrap;
   font-size: 0.82rem;
 }
 
