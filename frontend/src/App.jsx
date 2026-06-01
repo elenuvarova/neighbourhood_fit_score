@@ -845,6 +845,12 @@ export default function App() {
       filter: ["in", ["get", "id"], ["literal", filterMatching]],
       paint: { "fill-color": "#4ade80", "fill-opacity": 0.78 },
     }, beforeId)
+
+    // Keep POI and improvement layers on top of the filter overlay
+    MAP_LAYERS.forEach(({ cat }) => {
+      if (m.getLayer(`poi-${cat}`)) m.moveLayer(`poi-${cat}`)
+    })
+    if (m.getLayer("improvements-circles")) m.moveLayer("improvements-circles")
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [mapReady, filterMatching, sectorsGeo])
 
