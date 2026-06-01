@@ -1080,6 +1080,8 @@ body {
   background: rgba(10, 11, 16, 0.97) !important;
   border: 1.5px solid #facc15 !important;
   box-shadow: 0 4px 20px rgba(0, 0, 0, 0.8) !important;
+  max-width: none !important;
+  width: max-content !important;
 }
 
 /* ── MapLibre overrides (attribution) */
