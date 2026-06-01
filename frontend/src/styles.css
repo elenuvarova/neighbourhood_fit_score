@@ -1074,7 +1074,14 @@ body {
 .imp-popup {
   white-space: normal;
   max-width: 200px;
-  line-height: 1.4;
+  line-height: 1.5;
+  font-size: 0.82rem;
+}
+
+.imp-popup-wrap .maplibregl-popup-content {
+  background: rgba(10, 11, 16, 0.97) !important;
+  border: 1.5px solid #facc15 !important;
+  box-shadow: 0 4px 20px rgba(0, 0, 0, 0.8) !important;
 }
 
 /* ── MapLibre overrides (attribution) */

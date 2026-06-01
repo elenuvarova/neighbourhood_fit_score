@@ -927,7 +927,7 @@ export default function App() {
           "circle-opacity": 0.9,
         },
       })
-      const impPopup = new maplibregl.Popup({ closeButton: false, closeOnClick: false, offset: 8 })
+      const impPopup = new maplibregl.Popup({ closeButton: false, closeOnClick: false, offset: 8, className: "imp-popup-wrap" })
       m.on("mouseenter", "improvements-circles", e => {
         m.getCanvas().style.cursor = "pointer"
         const p = e.features?.[0]?.properties
