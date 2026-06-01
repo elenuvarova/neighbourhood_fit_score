@@ -464,6 +464,7 @@ function MapLayerToggles({ sectorId, mapInst, mapReady }) {
           "circle-opacity": 0.88,
         },
       })
+    if (m.getLayer("improvements-circles")) m.moveLayer("improvements-circles")
   }, [mapInst])
 
   // When sector changes: remove old layers, re-add any that were active
@@ -916,6 +917,7 @@ export default function App() {
 
     if (m.getSource("improvements")) {
       m.getSource("improvements").setData(geojson)
+      m.moveLayer("improvements-circles")
     } else {
       m.addSource("improvements", { type: "geojson", data: geojson })
       m.addLayer({
