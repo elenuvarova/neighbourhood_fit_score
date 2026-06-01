@@ -41,6 +41,15 @@ class Poi(SQLModel, table=True):
     lng: float
 
 
+class GeocodeCache(SQLModel, table=True):
+    """Cached Nominatim geocode results to avoid repeated API calls."""
+    __tablename__ = "geocode_cache"
+    id: Optional[int] = Field(default=None, primary_key=True)
+    query: str = Field(index=True, unique=True)
+    lat: float
+    lng: float
+
+
 class Improvement(SQLModel, table=True):
     """'How to improve' suggestion: add one POI → score delta."""
     id: Optional[int] = Field(default=None, primary_key=True)
