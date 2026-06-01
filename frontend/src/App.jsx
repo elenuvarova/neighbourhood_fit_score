@@ -175,20 +175,72 @@ function PreferenceFilter({ filterCats, onToggle, onClear, filterMatching, minSc
           </button>
         ))}
       </div>
-      <div className="filter-threshold">
-        {FILTER_THRESHOLDS.map(t => (
-          <button
-            key={t.value}
-            className={`threshold-btn${minScore === t.value ? " active" : ""}`}
-            onClick={() => onMinScore(t.value)}
-          >
-            {t.label} {t.value}+
-          </button>
-        ))}
-      </div>
+      {active && (
+        <div className="filter-threshold">
+          <span className="threshold-label">Min score:</span>
+          {FILTER_THRESHOLDS.map(t => (
+            <button
+              key={t.value}
+              className={`threshold-btn${minScore === t.value ? " active" : ""}`}
+              onClick={() => onMinScore(t.value)}
+            >
+              {t.label} {t.value}+
+            </button>
+          ))}
+        </div>
+      )}
       {active && !loading && count === 0 && (
         <p className="filter-empty">No sectors match — try a lower threshold.</p>
       )}
+    </div>
+  )
+}
+
+// ── Onboarding tour ─────────────────────────────────────────────────────────
+
+const TOUR_STEPS = [
+  {
+    icon: "◑",
+    title: "Pick your scenario",
+    body: "Family, Senior, or Remote Work — the map recolours every Brussels sector based on what matters for your lifestyle.",
+  },
+  {
+    icon: "◎",
+    title: "Filter by amenity",
+    body: "Select Parks, Cafés, Transit… to highlight only sectors where all of them are within walking distance. Adjust the min-score threshold for strictness.",
+  },
+  {
+    icon: "▣",
+    title: "Click any sector",
+    body: "Tap a coloured area to see its score, strengths, gaps, and AI-powered improvement suggestions.",
+  },
+  {
+    icon: "↔",
+    title: "Compare two areas",
+    body: "Hit Compare after selecting a sector and click (or type) a second address to see a side-by-side breakdown.",
+  },
+]
+
+function TourCard({ step, onNext, onSkip }) {
+  if (step === null) return null
+  const s = TOUR_STEPS[step]
+  const isLast = step === TOUR_STEPS.length - 1
+  return (
+    <div className="tour-card">
+      <div className="tour-dots">
+        {TOUR_STEPS.map((_, i) => (
+          <span key={i} className={`tour-dot${i === step ? " active" : ""}${i < step ? " done" : ""}`} />
+        ))}
+      </div>
+      <div className="tour-icon">{s.icon}</div>
+      <p className="tour-title">{s.title}</p>
+      <p className="tour-body">{s.body}</p>
+      <div className="tour-actions">
+        <button className="tour-skip" onClick={onSkip}>Skip</button>
+        <button className="tour-next" onClick={isLast ? onSkip : onNext}>
+          {isLast ? "Get started" : "Next →"}
+        </button>
+      </div>
     </div>
   )
 }
@@ -576,6 +628,9 @@ export default function App() {
   const [filterCats, setFilterCats]       = useState(new Set())
   const [filterMatching, setFilterMatching] = useState(null)
   const [filterMinScore, setFilterMinScore] = useState(60)
+  const [tourStep, setTourStep]           = useState(() =>
+    localStorage.getItem("nfs-tour-done") ? null : 0
+  )
 
   const mapContainer          = useRef(null)
   const mapInst               = useRef(null)
@@ -587,6 +642,25 @@ export default function App() {
   const scenarioRef           = useRef(urlParams.current.scenario ?? "family")
   const fetchBySectorIdRef    = useRef(null)
   const fetchCompareByRef     = useRef(null)
+
+  // ── Tour ────────────────────────────────────────────────────────────────
+  const advanceTour = useCallback(() => {
+    setTourStep(prev => {
+      const next = (prev ?? 0) + 1
+      if (next >= TOUR_STEPS.length) {
+        localStorage.setItem("nfs-tour-done", "1")
+        return null
+      }
+      return next
+    })
+  }, [])
+
+  const skipTour = useCallback(() => {
+    localStorage.setItem("nfs-tour-done", "1")
+    setTourStep(null)
+  }, [])
+
+  const startTour = useCallback(() => setTourStep(0), [])
 
   // ── Filter callbacks ────────────────────────────────────────────────────
   const toggleFilterCat = useCallback((cat) => {
@@ -974,6 +1048,7 @@ export default function App() {
           <span className="logo-dot" />
           <span className="logo-text">Neighbourhood Fit</span>
           <CityPicker city={city} onChange={handleCityChange} />
+          <button className="tour-trigger" onClick={startTour} title="Feature tour">?</button>
         </div>
 
         {/* Scenario tabs */}
@@ -1005,13 +1080,15 @@ export default function App() {
 
         {error && <p className="error-msg">{error}</p>}
 
-        {!result && !loading && (
+        {!result && !loading && tourStep === null && (
           <p className="hint">
             {filterCats.size > 0
               ? "Matching sectors are highlighted green. Click one to explore."
               : "Enter an address above or click any sector on the map."}
           </p>
         )}
+
+        <TourCard step={tourStep} onNext={advanceTour} onSkip={skipTour} />
 
         {loading && <div className="skeleton-block" />}
 
