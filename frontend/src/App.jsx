@@ -783,6 +783,11 @@ export default function App() {
 
     const popup = new maplibregl.Popup({ closeButton: false, closeOnClick: false, offset: 6 })
     m.on("mousemove", "sectors-fill", e => {
+      if (m.getLayer("improvements-circles") &&
+          m.queryRenderedFeatures(e.point, { layers: ["improvements-circles"] }).length > 0) {
+        popup.remove()
+        return
+      }
       const feat = e.features?.[0]
       if (!feat) return
       const { name_fr, score } = feat.properties
