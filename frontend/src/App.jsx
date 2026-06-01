@@ -137,6 +137,11 @@ function CategoryBars({ breakdown, scenario }) {
   )
 }
 
+function NarrativeBlock({ narrative }) {
+  if (!narrative) return null
+  return <p className="narrative-text">{narrative}</p>
+}
+
 function WhyPanel({ pros, cons }) {
   if (!pros?.length && !cons?.length) return null
   return (
@@ -157,6 +162,76 @@ function WhyPanel({ pros, cons }) {
           </ul>
         </div>
       )}
+    </div>
+  )
+}
+
+function ComparePanel({ cmp, onClose }) {
+  const { a, b, deltas, scenario } = cmp
+  const scenLabel = SCENARIOS.find(s => s.id === scenario)?.label ?? scenario
+  const aWins = deltas.filter(d => d.winner === "a").length
+  const bWins = deltas.filter(d => d.winner === "b").length
+
+  return (
+    <div className="compare-panel">
+      <div className="compare-header">
+        <span className="compare-title">Comparing · {scenLabel}</span>
+        <button className="compare-close" onClick={onClose}>✕</button>
+      </div>
+
+      {/* Score summary row */}
+      <div className="compare-scores">
+        {[
+          { side: "a", sec: a.sector, score: a.score, pct: a.percentile },
+          { side: "b", sec: b.sector, score: b.score, pct: b.percentile },
+        ].map(({ side, sec, score, pct }) => (
+          <div key={side} className={`compare-side compare-side-${side}`}>
+            <span className="compare-sector-name">
+              {sec.name_fr || sec.id}
+            </span>
+            <span className="compare-score" style={{ color: scoreColor(score) }}>
+              {score}
+            </span>
+            <span className="compare-pct">top {Math.max(1, 100 - pct)}%</span>
+          </div>
+        ))}
+      </div>
+
+      <p className="compare-verdict">
+        {cmp.tradeoffNarrative || (
+          a.score === b.score
+            ? "Scores are equal."
+            : a.score > b.score
+            ? `${a.sector.name_fr || "A"} scores higher (+${a.score - b.score} pts).`
+            : `${b.sector.name_fr || "B"} scores higher (+${b.score - a.score} pts).`
+        )}
+      </p>
+
+      {/* Per-category deltas */}
+      <div className="compare-deltas">
+        {deltas.slice(0, 10).map(d => {
+          const label = CATEGORY_LABELS[d.category] ?? d.category
+          const maxVal = Math.max(d.a, d.b, 1)
+          return (
+            <div key={d.category} className="delta-row">
+              <span className="delta-label">{label}</span>
+              <div className="delta-bars">
+                <div
+                  className={`delta-bar delta-bar-a${d.winner === "a" ? " winner" : ""}`}
+                  style={{ width: `${(d.a / maxVal) * 100}%` }}
+                  title={`A: ${d.a}`}
+                />
+                <div
+                  className={`delta-bar delta-bar-b${d.winner === "b" ? " winner" : ""}`}
+                  style={{ width: `${(d.b / maxVal) * 100}%` }}
+                  title={`B: ${d.b}`}
+                />
+              </div>
+              <span className="delta-scores">{d.a} vs {d.b}</span>
+            </div>
+          )
+        })}
+      </div>
     </div>
   )
 }
@@ -267,6 +342,94 @@ function MapLayerToggles({ sectorId, mapInst, mapReady }) {
   )
 }
 
+function GrokPanel({ sectorId, scenario }) {
+  const [question, setQuestion] = useState("")
+  const [answer, setAnswer]     = useState("")
+  const [streaming, setStreaming] = useState(false)
+  const [grokError, setGrokError] = useState(null)
+  const abortRef = useRef(null)
+
+  const ask = async () => {
+    const q = question.trim()
+    setAnswer("")
+    setGrokError(null)
+    setStreaming(true)
+    if (abortRef.current) abortRef.current.abort()
+    const ctrl = new AbortController()
+    abortRef.current = ctrl
+
+    try {
+      const resp = await fetch(`${API}/api/explain`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ sector_id: sectorId, scenario, question: q || null }),
+        signal: ctrl.signal,
+      })
+      if (!resp.ok) {
+        const err = await resp.json().catch(() => ({}))
+        throw new Error(err.detail || resp.statusText)
+      }
+
+      const reader = resp.body.getReader()
+      const dec = new TextDecoder()
+      let buf = ""
+      let done = false
+
+      while (!done) {
+        const { value, done: d } = await reader.read()
+        done = d
+        buf += dec.decode(value ?? new Uint8Array(), { stream: !d })
+        const lines = buf.split("\n")
+        buf = lines.pop()
+        for (const line of lines) {
+          if (!line.startsWith("data: ")) continue
+          const payload = line.slice(6)
+          if (payload === "[DONE]") { done = true; break }
+          try {
+            const obj = JSON.parse(payload)
+            if (obj.error) throw new Error(obj.error)
+            if (obj.token) setAnswer(prev => prev + obj.token)
+          } catch (_) {}
+        }
+      }
+    } catch (e) {
+      if (e.name !== "AbortError") setGrokError(e.message)
+    } finally {
+      setStreaming(false)
+    }
+  }
+
+  return (
+    <div className="grok-panel">
+      <p className="section-title">Ask Grok</p>
+      <div className="grok-input-row">
+        <input
+          className="address-input grok-input"
+          placeholder="Any question about this neighbourhood…"
+          value={question}
+          onChange={e => setQuestion(e.target.value)}
+          onKeyDown={e => e.key === "Enter" && !streaming && ask()}
+          disabled={streaming}
+        />
+        <button
+          className="search-btn grok-btn"
+          onClick={ask}
+          disabled={streaming}
+        >
+          {streaming ? "…" : "Ask"}
+        </button>
+      </div>
+      {grokError && <p className="error-msg">{grokError}</p>}
+      {(answer || streaming) && (
+        <div className={`grok-answer${streaming ? " streaming" : ""}`}>
+          {answer}
+          {streaming && <span className="grok-cursor" />}
+        </div>
+      )}
+    </div>
+  )
+}
+
 function DisclosureFooter({ disclosure }) {
   if (!disclosure) return null
   return (
@@ -299,11 +462,21 @@ export default function App() {
   const [mapReady, setMapReady]           = useState(false)
   const [sectorsGeo, setSectorsGeo]       = useState(null)
   const [highlightedImp, setHighlightedImp] = useState(null)
+  const [compareAddr, setCompareAddr]     = useState("")
+  const [compareMode, setCompareMode]     = useState(false)
+  const [compareResult, setCompareResult] = useState(null)
+  const [compareLoading, setCompareLoading] = useState(false)
 
-  const mapContainer  = useRef(null)
-  const mapInst       = useRef(null)
-  const geoCache      = useRef({})
-  const isFirstRender = useRef(true)
+  const mapContainer       = useRef(null)
+  const mapInst            = useRef(null)
+  const geoCache           = useRef({})
+  const isFirstRender      = useRef(true)
+  // Stable refs so map event handlers always see current state
+  const compareModeRef     = useRef(false)
+  const resultRef          = useRef(null)
+  const scenarioRef        = useRef("family")
+  const fetchBySectorIdRef = useRef(null)
+  const fetchCompareByRef  = useRef(null)
 
   // ── Init map ────────────────────────────────────────────────────────────
   useEffect(() => {
@@ -376,12 +549,42 @@ export default function App() {
       paint: { "line-color": "#ffffff", "line-width": 3, "line-opacity": 1 },
     })
 
+    m.addLayer({
+      id: "sector-compare-b",
+      type: "line",
+      source: "sectors",
+      filter: ["==", ["get", "id"], ""],
+      paint: { "line-color": "#a78bfa", "line-width": 3, "line-opacity": 1 },
+    })
+
+    // Hover popup
+    const popup = new maplibregl.Popup({ closeButton: false, closeOnClick: false, offset: 6 })
+    m.on("mousemove", "sectors-fill", e => {
+      const feat = e.features?.[0]
+      if (!feat) return
+      const { name_fr, score } = feat.properties
+      const scoreStr = score != null ? ` <span class="popup-score">${score}</span>` : ""
+      popup.setLngLat(e.lngLat)
+        .setHTML(`<div class="map-popup">${name_fr || feat.properties.id}${scoreStr}</div>`)
+        .addTo(m)
+    })
+    m.on("mouseleave", "sectors-fill", () => {
+      popup.remove()
+      m.getCanvas().style.cursor = ""
+    })
+
     m.on("click", "sectors-fill", e => {
       const id = e.features?.[0]?.properties?.id
-      if (id) fetchBySectorId(id)
+      if (!id) return
+      if (compareModeRef.current && resultRef.current?.sector?.id) {
+        fetchCompareByRef.current(id)
+      } else {
+        fetchBySectorIdRef.current(id)
+      }
     })
-    m.on("mouseenter", "sectors-fill", () => { m.getCanvas().style.cursor = "pointer" })
-    m.on("mouseleave", "sectors-fill", () => { m.getCanvas().style.cursor = "" })
+    m.on("mouseenter", "sectors-fill", () => {
+      m.getCanvas().style.cursor = compareModeRef.current ? "crosshair" : "pointer"
+    })
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [mapReady, sectorsGeo])
 
@@ -399,6 +602,14 @@ export default function App() {
       })
     }
   }, [mapReady, result])
+
+  // ── Highlight compare sector B ──────────────────────────────────────────
+  useEffect(() => {
+    const m = mapInst.current
+    if (!mapReady || !m?.getLayer("sector-compare-b")) return
+    const id = compareResult?.b?.sector?.id ?? ""
+    m.setFilter("sector-compare-b", ["==", ["get", "id"], id])
+  }, [mapReady, compareResult])
 
   // ── Improvement markers layer ───────────────────────────────────────────
   useEffect(() => {
@@ -449,6 +660,7 @@ export default function App() {
   // ── Re-fetch on scenario change ─────────────────────────────────────────
   useEffect(() => {
     if (isFirstRender.current) { isFirstRender.current = false; return }
+    setCompareResult(null)
     if (result?.sector?.id) fetchBySectorId(result.sector.id)
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [scenario])
@@ -475,6 +687,8 @@ export default function App() {
   const fetchBySectorId = async (sectorId) => {
     setLoading(true)
     setError(null)
+    setCompareResult(null)
+    setCompareMode(false)
     try {
       const r = await fetch(`${API}/api/sector/${sectorId}?scenario=${scenario}`)
       if (!r.ok) throw new Error(await r.json().then(d => d.detail).catch(() => r.statusText))
@@ -485,6 +699,60 @@ export default function App() {
       setLoading(false)
     }
   }
+
+  const fetchCompare = async () => {
+    const addr = compareAddr.trim()
+    if (!addr || !result?.sector?.id) return
+    setCompareLoading(true)
+    setError(null)
+    try {
+      const geo = await fetch(
+        `${API}/api/score?address=${encodeURIComponent(addr)}&scenario=${scenario}`
+      )
+      if (!geo.ok) throw new Error(await geo.json().then(d => d.detail).catch(() => geo.statusText))
+      const geoData = await geo.json()
+      const sectorBId = geoData.sector.id
+      if (sectorBId === result.sector.id) {
+        setError("Same sector — enter a different address to compare.")
+        return
+      }
+      await _doCompare(result.sector.id, sectorBId)
+    } catch (e) {
+      setError(e.message)
+    } finally {
+      setCompareLoading(false)
+    }
+  }
+
+  const _doCompare = async (sectorAId, sectorBId) => {
+    const cmp = await fetch(
+      `${API}/api/compare?a=${sectorAId}&b=${sectorBId}&scenario=${scenarioRef.current}`
+    )
+    if (!cmp.ok) throw new Error(await cmp.json().then(d => d.detail).catch(() => cmp.statusText))
+    setCompareResult(await cmp.json())
+    setCompareMode(false)
+  }
+
+  const fetchCompareById = async (sectorBId) => {
+    const sectorAId = resultRef.current?.sector?.id
+    if (!sectorAId || sectorAId === sectorBId) return
+    setCompareLoading(true)
+    setError(null)
+    try {
+      await _doCompare(sectorAId, sectorBId)
+    } catch (e) {
+      setError(e.message)
+    } finally {
+      setCompareLoading(false)
+    }
+  }
+
+  // Keep refs in sync on every render
+  compareModeRef.current    = compareMode
+  resultRef.current         = result
+  scenarioRef.current       = scenario
+  fetchBySectorIdRef.current = fetchBySectorId
+  fetchCompareByRef.current  = fetchCompareById
 
   // ── Render ──────────────────────────────────────────────────────────────
   const communeName = result ? COMMUNES[result.sector.municipality] : null
@@ -548,8 +816,59 @@ export default function App() {
               </div>
             </div>
 
+            {/* AI narrative (if generated) */}
+            <NarrativeBlock narrative={result.narrative} />
+
             {/* Pros / cons */}
             <WhyPanel pros={result.pros} cons={result.cons} />
+
+            {/* Live Grok Q&A */}
+            <GrokPanel sectorId={result.sector.id} scenario={scenario} />
+
+            {/* Compare mode */}
+            {!compareMode && !compareResult && (
+              <button
+                className="compare-trigger"
+                onClick={() => setCompareMode(true)}
+              >
+                Compare with another address ↔
+              </button>
+            )}
+            {compareMode && !compareResult && (
+              <div className="compare-active">
+                <p className="compare-hint">
+                  {compareLoading ? "Loading…" : "Click any sector on the map, or type an address:"}
+                </p>
+                <div className="compare-input-row">
+                  <input
+                    className="address-input"
+                    placeholder="Second address…"
+                    value={compareAddr}
+                    onChange={e => setCompareAddr(e.target.value)}
+                    onKeyDown={e => e.key === "Enter" && fetchCompare()}
+                  />
+                  <button
+                    className="search-btn"
+                    onClick={fetchCompare}
+                    disabled={compareLoading || !compareAddr.trim()}
+                  >
+                    {compareLoading ? "…" : "↔"}
+                  </button>
+                  <button
+                    className="compare-cancel"
+                    onClick={() => { setCompareMode(false); setCompareAddr("") }}
+                  >
+                    ✕
+                  </button>
+                </div>
+              </div>
+            )}
+            {compareResult && (
+              <ComparePanel
+                cmp={compareResult}
+                onClose={() => { setCompareResult(null); setCompareMode(false); setCompareAddr("") }}
+              />
+            )}
 
             {/* POI layer toggles */}
             <MapLayerToggles

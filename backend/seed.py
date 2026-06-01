@@ -32,11 +32,12 @@ sys.path.insert(0, str(_BACKEND))
 from app.database import engine
 from app.models import GeocodeCache, Improvement, Poi, Sector, SectorScore  # noqa: F401
 
-PROCESSED     = _BACKEND / "pipeline" / "data" / "processed"
-SECTORS_FILE  = PROCESSED / "sectors.geojson"
-SCORES_FILE   = PROCESSED / "scores.csv"
-IMPS_FILE     = PROCESSED / "improvements.csv"
-TRANSIT_FILE  = PROCESSED / "transit_stops.geojson"
+PROCESSED        = _BACKEND / "pipeline" / "data" / "processed"
+SECTORS_FILE     = PROCESSED / "sectors.geojson"
+SCORES_FILE      = PROCESSED / "scores.csv"
+IMPS_FILE        = PROCESSED / "improvements.csv"
+NARRATIVES_FILE  = PROCESSED / "narratives.csv"
+TRANSIT_FILE     = PROCESSED / "transit_stops.geojson"
 
 # Scenario weights (mirrors config.py — kept in sync manually)
 _WEIGHTS = {
@@ -103,12 +104,29 @@ def _seed_sectors(session: Session) -> int:
     return len(records)
 
 
+def _load_narratives() -> dict[tuple[str, str], tuple[str, list]]:
+    out: dict[tuple[str, str], tuple[str, list]] = {}
+    if not NARRATIVES_FILE.exists():
+        return out
+    with open(NARRATIVES_FILE, newline="", encoding="utf-8") as f:
+        for row in csv.DictReader(f):
+            key = (row["sector_id"], row["scenario"])
+            highlights = json.loads(row["highlights_json"]) if row.get("highlights_json") else []
+            out[key] = (row.get("narrative", ""), highlights)
+    return out
+
+
 def _seed_scores(session: Session) -> int:
+    narratives = _load_narratives()
+    if narratives:
+        print(f"  Narratives loaded: {len(narratives)}")
     records = []
     with open(SCORES_FILE, newline="", encoding="utf-8") as f:
         for row in csv.DictReader(f):
             breakdown = json.loads(row["breakdown"])
             pros, cons = _pros_cons(breakdown, row["scenario"])
+            key = (row["sector_id"], row["scenario"])
+            narrative, highlights = narratives.get(key, ("", []))
             records.append(SectorScore(
                 sector_id=row["sector_id"],
                 scenario=row["scenario"],
@@ -117,6 +135,8 @@ def _seed_scores(session: Session) -> int:
                 breakdown=breakdown,
                 pros=pros,
                 cons=cons,
+                narrative=narrative or None,
+                highlights=highlights or None,
             ))
     session.add_all(records)
     return len(records)

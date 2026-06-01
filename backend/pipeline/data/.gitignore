@@ -20,6 +20,7 @@ processed/*.geojson
 processed/*.csv
 !processed/scores.csv
 !processed/improvements.csv
+!processed/narratives.csv
 
 # Keep the directory structure
 !.gitignore

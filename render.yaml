@@ -1,12 +1,12 @@
 databases:
-  - name: ai-workshop-db
+  - name: neighbourhood-fit-db
     plan: free
     databaseName: app
     user: app
 
 services:
   - type: web
-    name: ai-workshop-web
+    name: neighbourhood-fit-web
     runtime: docker
     plan: free
     dockerfilePath: ./Dockerfile
@@ -18,7 +18,9 @@ services:
         value: 3001
       - key: DATABASE_URL
         fromDatabase:
-          name: ai-workshop-db
+          name: neighbourhood-fit-db
           property: connectionString
       - key: NOMINATIM_USER_AGENT
         value: neighbourhood-fit-score/1.0 (open-source, brussels-pilot)
+      - key: GROQ_API_KEY
+        sync: false   # set manually in Render dashboard (never commit the real key)

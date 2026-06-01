@@ -181,6 +181,11 @@ def main() -> None:
     print(f"  {len(sectors)} sectors  |  {len(pois):,} POIs  |  {n_transit:,} transit stops")
     print("  Loading walk graph (may take ~20 s) …")
     G = ox.load_graphml(GRAPH_PATH)
+    # GraphML stores all attributes as strings — cast travel_time weights to float
+    for _, _, data in G.edges(data=True):
+        for key in ("travel_time", "travel_time_senior", "length"):
+            if key in data and isinstance(data[key], str):
+                data[key] = float(data[key])
     print(f"  Graph: {G.number_of_nodes():,} nodes, {G.number_of_edges():,} edges")
 
     # ── Snap to graph nodes ───────────────────────────────────────────────
@@ -227,10 +232,10 @@ def main() -> None:
             print(f"  {idx + 1}/{len(sectors)} …", end="\r", flush=True)
 
         # One Dijkstra per walk-speed variant; family + remote share default speed
-        dist_default = nx.single_source_dijkstra_length(
+        dist_default = nx.single_source_dijkstra_path_length(
             G, src, weight="travel_time", cutoff=1800
         )
-        dist_senior = nx.single_source_dijkstra_length(
+        dist_senior = nx.single_source_dijkstra_path_length(
             G, src, weight="travel_time_senior", cutoff=1800
         )
 

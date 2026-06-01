@@ -27,6 +27,7 @@ from pathlib import Path
 
 import geopandas as gpd
 import pandas as pd
+import shapely
 from sqlmodel import Session, SQLModel, delete, select
 
 # Add backend/ to path so we can import app.*
@@ -38,6 +39,7 @@ from app.models import Improvement, Poi, Sector, SectorScore  # noqa: F401
 
 PROCESSED = _BACKEND / "pipeline" / "data" / "processed"
 IMPROVEMENTS_FILE = PROCESSED / "improvements.csv"
+NARRATIVES_FILE   = PROCESSED / "narratives.csv"
 SECTORS_FILE  = PROCESSED / "sectors.geojson"
 POIS_FILE     = PROCESSED / "pois_all.geojson"
 TRANSIT_FILE  = PROCESSED / "transit_stops.geojson"
@@ -95,7 +97,7 @@ def _seed_sectors(session: Session, gdf: gpd.GeoDataFrame) -> int:
 
     records = []
     for idx, row in gdf_wgs.iterrows():
-        geom = json.loads(row.geometry.to_json()) if row.geometry else None
+        geom = json.loads(shapely.to_geojson(row.geometry)) if row.geometry else None
         cent = centroids.iloc[idx] if isinstance(idx, int) else centroids[idx]
         records.append(Sector(
             id=str(row["id"]),
@@ -117,14 +119,33 @@ def _seed_sectors(session: Session, gdf: gpd.GeoDataFrame) -> int:
 # Score seeding
 # ---------------------------------------------------------------------------
 
+def _load_narratives() -> dict[tuple[str, str], tuple[str, list]]:
+    """Load narratives.csv → {(sector_id, scenario): (narrative, highlights)}."""
+    out: dict[tuple[str, str], tuple[str, list]] = {}
+    if not NARRATIVES_FILE.exists():
+        return out
+    nar_df = pd.read_csv(NARRATIVES_FILE, keep_default_na=False)
+    for _, row in nar_df.iterrows():
+        key = (str(row["sector_id"]), str(row["scenario"]))
+        highlights = json.loads(row["highlights_json"]) if row.get("highlights_json") else []
+        out[key] = (str(row.get("narrative", "")), highlights)
+    return out
+
+
 def _seed_scores(session: Session, df: pd.DataFrame) -> int:
     from config import SCENARIO_WEIGHTS  # noqa: local import to avoid circular
+
+    narratives = _load_narratives()
+    if narratives:
+        print(f"  Narratives loaded: {len(narratives)}")
 
     records = []
     for _, row in df.iterrows():
         breakdown = json.loads(row["breakdown"])
         weights = SCENARIO_WEIGHTS.get(row["scenario"], {})
         pros, cons = _pros_cons(breakdown, weights)
+        key = (str(row["sector_id"]), str(row["scenario"]))
+        narrative, highlights = narratives.get(key, ("", []))
         records.append(SectorScore(
             sector_id=str(row["sector_id"]),
             scenario=str(row["scenario"]),
@@ -133,6 +154,8 @@ def _seed_scores(session: Session, df: pd.DataFrame) -> int:
             breakdown=breakdown,
             pros=pros,
             cons=cons,
+            narrative=narrative or None,
+            highlights=highlights or None,
         ))
 
     session.add_all(records)

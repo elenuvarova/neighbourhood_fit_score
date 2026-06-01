@@ -1,0 +1,12 @@
+# Pipeline-only dependencies (heavy spatial stack + AI — NOT used in runtime)
+# Install with: pip install -r requirements-pipeline.txt
+geopandas>=0.14.0
+osmnx>=1.9.0
+pyrosm>=0.6.2
+networkx>=3.2
+numpy>=1.26.0
+scipy>=1.11.0
+shapely>=2.0.6
+requests>=2.31.0
+python-dotenv>=1.0.0
+openai>=1.40.0       # Week 8: xAI Grok narrative batch (OpenAI-compatible SDK)
