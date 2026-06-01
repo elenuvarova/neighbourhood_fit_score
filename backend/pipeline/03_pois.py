@@ -1,68 +1,69 @@
 """
 Extract OSM POIs for Brussels from the Geofabrik Belgium PBF.
-Categorise by tag, convert polygons to representative points,
-spatial-join to sectors, and compute per-sector counts.
+Uses osmium-tool (CLI) + pyosmium + geopandas.
 
-Also extracts STIB GTFS transit stops with departure frequency.
+Workflow:
+  1. osmium extract  — crop Belgium PBF to Brussels bbox → brussels.osm.pbf
+  2. osmium export   — convert OSM → GeoJSON (nodes + closed ways as polygons)
+  3. geopandas       — categorise, area-gate parks, spatial-join to sectors
+  4. STIB GTFS       — transit stops with departure frequency
 
 Outputs:
   data/processed/pois_all.geojson        — all POIs with category + sector_id
-  data/processed/sector_amenities.csv    — wide table: sector_id × category counts
+  data/processed/sector_amenities.csv    — sector_id × category counts
   data/processed/transit_stops.geojson  — STIB stops with freq_peak / freq_allday
 
 Run:
   cd backend/pipeline
   python 03_pois.py
 
-Notes:
-  - Belgium PBF is ~500 MB; pyrosm reads only the Brussels bbox → ~1-3 min.
-  - Parks need area ≥ 0.5 ha (PARK_MIN_HA) to count for scoring.
-  - Low-confidence categories (coworking, gp, bench) are flagged in output.
+Dependencies:
+  brew install osmium-tool      (one-time system install)
+  pip install osmium geopandas  (already in requirements-pipeline.txt)
 """
 from __future__ import annotations
 
 import csv
+import json
+import shutil
+import subprocess
 import sys
 import zipfile
 from pathlib import Path
 
 import geopandas as gpd
 import pandas as pd
-import pyrosm
-from shapely.geometry import box
+from shapely.geometry import shape
 
 sys.path.insert(0, str(Path(__file__).parent))
 from config import (
     BRUSSELS_BBOX, CRS_LAMBERT, CRS_WGS84,
     DATA_PROCESSED, DATA_RAW,
     LOW_CONFIDENCE_CATEGORIES, OSM_CATEGORY_TAGS, PARK_MIN_HA,
-    make_pyrosm_filter,
 )
 
+PBF_BELGIUM = DATA_RAW / "belgium-latest.osm.pbf"
+PBF_BRUSSELS = DATA_RAW / "brussels.osm.pbf"
+GEOJSON_POIS = DATA_RAW / "brussels_pois.geojson"
 SECTORS_PATH = DATA_PROCESSED / "sectors.geojson"
 OUT_POIS = DATA_PROCESSED / "pois_all.geojson"
 OUT_AMENITIES = DATA_PROCESSED / "sector_amenities.csv"
 OUT_TRANSIT = DATA_PROCESSED / "transit_stops.geojson"
-
-# OSM tag fields pyrosm preserves in the output GeoDataFrame
-_TAG_COLS = ["amenity", "shop", "leisure", "landuse", "natural",
-             "healthcare", "office", "building", "highway", "name", "name:fr", "name:nl"]
 
 
 # ---------------------------------------------------------------------------
 # Category assignment
 # ---------------------------------------------------------------------------
 
-def assign_category(row: pd.Series) -> str | None:
-    """Map one OSM feature's tags to a scoring category (or None to drop)."""
-    amenity   = str(row.get("amenity")   or "")
-    shop      = str(row.get("shop")      or "")
-    leisure   = str(row.get("leisure")   or "")
-    landuse   = str(row.get("landuse")   or "")
-    natural_  = str(row.get("natural")   or "")
-    healthcare = str(row.get("healthcare") or "")
-    office    = str(row.get("office")    or "")
-    building  = str(row.get("building")  or "")
+def assign_category(tags: dict) -> str | None:
+    amenity    = tags.get("amenity", "")
+    shop       = tags.get("shop", "")
+    leisure    = tags.get("leisure", "")
+    landuse    = tags.get("landuse", "")
+    natural_   = tags.get("natural", "")
+    healthcare = tags.get("healthcare", "")
+    office     = tags.get("office", "")
+    building   = tags.get("building", "")
 
     if amenity == "school" or building == "school":                         return "school"
     if amenity in ("kindergarten", "childcare"):                            return "childcare"
@@ -89,110 +90,144 @@ def assign_category(row: pd.Series) -> str | None:
 
 
 # ---------------------------------------------------------------------------
-# OSM POI extraction via pyrosm
+# osmium CLI helpers
 # ---------------------------------------------------------------------------
 
-def _load_pois_from_pbf(pbf_path: Path) -> gpd.GeoDataFrame:
-    """Use pyrosm to load all relevant POIs within Brussels bbox."""
-    bbox = list(BRUSSELS_BBOX)  # [minx, miny, maxx, maxy]
-    print(f"  Loading PBF (Brussels bbox {bbox}) …")
-    osm = pyrosm.OSM(str(pbf_path), bounding_box=bbox)
-
-    custom_filter = make_pyrosm_filter()
-    print(f"  Filter keys: {list(custom_filter.keys())}")
-
-    # Main POIs (amenity, shop, leisure, office, healthcare, building)
-    print("  Extracting POIs …", flush=True)
-    pois = osm.get_pois(custom_filter=custom_filter)
-    if pois is None or len(pois) == 0:
-        raise RuntimeError("pyrosm returned no POIs — check PBF file and bbox")
-    print(f"  Raw POIs: {len(pois):,}")
-
-    # Natural features (wood)
-    try:
-        natural_gdf = osm.get_natural(custom_filter={"natural": ["wood"]})
-        if natural_gdf is not None and len(natural_gdf) > 0:
-            print(f"  Natural (wood): {len(natural_gdf):,}")
-            pois = pd.concat([pois, natural_gdf], ignore_index=True)
-    except Exception as e:
-        print(f"  ⚠  Could not load natural features: {e}")
-
-    # Landuse features (forest)
-    try:
-        landuse_gdf = osm.get_landuse(custom_filter={"landuse": ["forest"]})
-        if landuse_gdf is not None and len(landuse_gdf) > 0:
-            print(f"  Landuse (forest): {len(landuse_gdf):,}")
-            pois = pd.concat([pois, landuse_gdf], ignore_index=True)
-    except Exception as e:
-        print(f"  ⚠  Could not load landuse features: {e}")
-
-    return gpd.GeoDataFrame(pois, geometry="geometry", crs=CRS_WGS84)
+def _require_osmium() -> str:
+    path = shutil.which("osmium")
+    if path is None:
+        raise RuntimeError(
+            "osmium-tool not found. Install it:\n"
+            "  brew install osmium-tool\n"
+            "Then re-run this script."
+        )
+    return path
 
 
-def _to_points(gdf: gpd.GeoDataFrame) -> gpd.GeoDataFrame:
-    """
-    Convert mixed geometry to points.
-    Polygons (parks, schools, etc.) → representative_point.
-    Records area in m² for area-gated categories (parks).
-    """
-    gdf = gdf.copy()
+def _run(cmd: list[str], desc: str) -> None:
+    print(f"  {desc}")
+    result = subprocess.run(cmd, capture_output=True, text=True)
+    if result.returncode != 0:
+        raise RuntimeError(f"Command failed: {' '.join(cmd)}\n{result.stderr}")
 
-    # Compute area in LAMBERT (accurate metres), then reproject geometry to point
+
+def extract_brussels(osmium: str) -> None:
+    if PBF_BRUSSELS.exists():
+        print(f"  ✓ {PBF_BRUSSELS.name} already exists")
+        return
+    bbox_str = f"{BRUSSELS_BBOX[0]},{BRUSSELS_BBOX[1]},{BRUSSELS_BBOX[2]},{BRUSSELS_BBOX[3]}"
+    _run(
+        [osmium, "extract", "-b", bbox_str,
+         str(PBF_BELGIUM), "-o", str(PBF_BRUSSELS), "--overwrite"],
+        f"Extracting Brussels bbox {bbox_str} from Belgium PBF …"
+    )
+    size_mb = PBF_BRUSSELS.stat().st_size / 1_048_576
+    print(f"    ✓ brussels.osm.pbf  ({size_mb:.1f} MB)")
+
+
+def export_geojson(osmium: str) -> None:
+    if GEOJSON_POIS.exists():
+        print(f"  ✓ {GEOJSON_POIS.name} already exists")
+        return
+
+    # Build tag filter expression for osmium: nwr/key=v1,v2,...
+    # Collect all tag values per key from OSM_CATEGORY_TAGS
+    from collections import defaultdict
+    tag_index: dict[str, set[str]] = defaultdict(set)
+    for tag_list in OSM_CATEGORY_TAGS.values():
+        for tag_dict in tag_list:
+            for k, v in tag_dict.items():
+                tag_index[k].add(v)
+
+    # Build filter expressions: key=v1,v2 (or just key= for all values)
+    exprs = []
+    for k, vals in tag_index.items():
+        exprs.append(f"nwr/{k}={','.join(sorted(vals))}")
+
+    # osmium tags-filter to a temp file, then export
+    filtered_pbf = DATA_RAW / "brussels_pois.osm.pbf"
+    if not filtered_pbf.exists():
+        _run(
+            [osmium, "tags-filter", str(PBF_BRUSSELS),
+             *exprs, "-o", str(filtered_pbf), "--overwrite"],
+            "Filtering POI tags from Brussels PBF …"
+        )
+        size_mb = filtered_pbf.stat().st_size / 1_048_576
+        print(f"    ✓ brussels_pois.osm.pbf  ({size_mb:.1f} MB)")
+
+    _run(
+        [osmium, "export", str(filtered_pbf),
+         "--geometry-types=point,polygon",
+         "-f", "geojson",
+         "-o", str(GEOJSON_POIS), "--overwrite"],
+        "Exporting POIs to GeoJSON …"
+    )
+    size_mb = GEOJSON_POIS.stat().st_size / 1_048_576
+    print(f"    ✓ brussels_pois.geojson  ({size_mb:.1f} MB)")
+
+
+# ---------------------------------------------------------------------------
+# Load & categorise
+# ---------------------------------------------------------------------------
+
+def load_and_categorise() -> gpd.GeoDataFrame:
+    print(f"  Reading {GEOJSON_POIS.name} …")
+    gdf = gpd.read_file(GEOJSON_POIS)
+    print(f"  Raw features: {len(gdf):,}")
+
+    # Assign category
+    def _cat(row):
+        tags = {k: (row[k] if k in row.index and pd.notna(row[k]) else "")
+                for k in ["amenity", "shop", "leisure", "landuse", "natural",
+                           "healthcare", "office", "building"]}
+        return assign_category(tags)
+
+    gdf["category"] = gdf.apply(_cat, axis=1)
+    gdf = gdf[gdf["category"].notna()].copy()
+    print(f"  After categorisation: {len(gdf):,}")
+
+    # Compute area in m² (Lambert projection)
     gdf_proj = gdf.to_crs(CRS_LAMBERT)
     gdf["area_m2"] = gdf_proj.geometry.area
 
-    mask_poly = ~gdf.geometry.geom_type.isin(["Point", "MultiPoint"])
-    if mask_poly.any():
-        gdf.loc[mask_poly, "geometry"] = (
-            gdf_proj.loc[mask_poly].geometry.representative_point().to_crs(CRS_WGS84)
-        )
-
-    return gdf
-
-
-def categorise(gdf: gpd.GeoDataFrame) -> gpd.GeoDataFrame:
-    """Add 'category' column; drop uncategorised rows."""
-    tag_cols = [c for c in _TAG_COLS if c in gdf.columns]
-    gdf = gdf.copy()
-    gdf["category"] = gdf[tag_cols].apply(assign_category, axis=1)
-    before = len(gdf)
-    gdf = gdf[gdf["category"].notna()].copy()
-    print(f"  Categorised: {len(gdf):,} / {before:,} features matched")
-    return gdf
-
-
-def apply_area_gates(gdf: gpd.GeoDataFrame) -> gpd.GeoDataFrame:
-    """Drop parks smaller than PARK_MIN_HA."""
+    # Park area gate: keep only parks ≥ PARK_MIN_HA
     park_mask = gdf["category"] == "park"
-    area_col = "area_m2" in gdf.columns
-    if park_mask.any() and area_col:
+    if park_mask.any():
         min_m2 = PARK_MIN_HA * 10_000
-        before = park_mask.sum()
-        too_small = park_mask & (gdf["area_m2"] < min_m2)
-        gdf = gdf[~too_small].copy()
-        dropped = too_small.sum()
-        print(f"  Parks: dropped {dropped} < {PARK_MIN_HA} ha; kept {before - dropped}")
+        drop = park_mask & (gdf["area_m2"] < min_m2)
+        kept = park_mask.sum() - drop.sum()
+        gdf = gdf[~drop].copy()
+        print(f"  Parks: {kept} kept (≥{PARK_MIN_HA} ha), {drop.sum()} dropped")
+
+    # Convert all geometries to points for distance scoring
+    is_poly = ~gdf.geometry.geom_type.isin(["Point", "MultiPoint"])
+    if is_poly.any():
+        gdf_proj2 = gdf[is_poly].to_crs(CRS_LAMBERT)
+        points = gdf_proj2.geometry.representative_point().to_crs(CRS_WGS84)
+        gdf.loc[is_poly, "geometry"] = points.values
+
     return gdf
 
-
-# ---------------------------------------------------------------------------
-# Spatial join to sectors
-# ---------------------------------------------------------------------------
 
 def join_to_sectors(pois: gpd.GeoDataFrame, sectors: gpd.GeoDataFrame) -> gpd.GeoDataFrame:
-    """Assign each POI to a sector via spatial join (point-in-polygon)."""
-    # Work in Lambert for spatial accuracy
     pois_proj = pois.to_crs(CRS_LAMBERT)
     sectors_proj = sectors[["id", "geometry"]].to_crs(CRS_LAMBERT)
-
     joined = gpd.sjoin(pois_proj, sectors_proj, how="left", predicate="within")
     joined = joined.rename(columns={"id": "sector_id"}).drop(columns=["index_right"], errors="ignore")
-
     inside = joined["sector_id"].notna().sum()
     outside = joined["sector_id"].isna().sum()
     print(f"  Spatial join: {inside:,} inside sectors, {outside:,} outside/unmatched")
-
     return joined.to_crs(CRS_WGS84)
+
+
+def build_amenity_table(pois: gpd.GeoDataFrame) -> pd.DataFrame:
+    return (
+        pois[pois["sector_id"].notna()]
+        .groupby(["sector_id", "category"])
+        .size()
+        .unstack(fill_value=0)
+        .reset_index()
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -200,17 +235,13 @@ def join_to_sectors(pois: gpd.GeoDataFrame, sectors: gpd.GeoDataFrame) -> gpd.Ge
 # ---------------------------------------------------------------------------
 
 def process_stib_gtfs() -> gpd.GeoDataFrame | None:
-    """
-    Load STIB GTFS, compute peak and all-day departure frequency per stop.
-    Returns a GeoDataFrame of stops with freq_peak / freq_allday columns.
-    """
     gtfs_zip = DATA_RAW / "stib_gtfs.zip"
     gtfs_dir = DATA_RAW / "stib_gtfs"
 
     if not gtfs_zip.exists() and not gtfs_dir.exists():
         print("  ⚠  STIB GTFS not found — transit stops skipped")
         print("     Download from: https://opendata.stib-mivb.be/")
-        print("     Save as: data/raw/stib_gtfs.zip")
+        print("     → GTFS Files (Production) → save as data/raw/stib_gtfs.zip")
         return None
 
     if not gtfs_dir.exists():
@@ -219,27 +250,25 @@ def process_stib_gtfs() -> gpd.GeoDataFrame | None:
         with zipfile.ZipFile(gtfs_zip) as z:
             z.extractall(gtfs_dir)
 
-    # Find GTFS files (may be at root or in subdirectory)
-    def _find_gtfs_file(name: str) -> Path | None:
+    def _find(name: str) -> Path | None:
         for p in [gtfs_dir / name, *gtfs_dir.glob(f"**/{name}")]:
             if p.exists():
                 return p
         return None
 
-    stops_path = _find_gtfs_file("stops.txt")
-    stop_times_path = _find_gtfs_file("stop_times.txt")
-    trips_path = _find_gtfs_file("trips.txt")
-    calendar_path = _find_gtfs_file("calendar.txt")
-
+    stops_path = _find("stops.txt")
     if stops_path is None:
         print("  ⚠  stops.txt not found in GTFS archive")
         return None
 
-    print(f"  Loading GTFS stops …")
+    print("  Loading STIB stops …")
     stops = pd.read_csv(stops_path)
     print(f"  Stops: {len(stops):,}")
 
-    # Compute departure frequency if stop_times is available
+    stop_times_path = _find("stop_times.txt")
+    trips_path = _find("trips.txt")
+    calendar_path = _find("calendar.txt")
+
     freq_df = None
     if stop_times_path and trips_path and calendar_path:
         freq_df = _compute_frequency(stop_times_path, trips_path, calendar_path)
@@ -249,101 +278,60 @@ def process_stib_gtfs() -> gpd.GeoDataFrame | None:
         geometry=gpd.points_from_xy(stops["stop_lon"], stops["stop_lat"]),
         crs=CRS_WGS84,
     )
-
     if freq_df is not None:
         stops_gdf = stops_gdf.merge(freq_df, on="stop_id", how="left")
     else:
         stops_gdf["freq_peak"] = None
         stops_gdf["freq_allday"] = None
-        print("  ⚠  Frequency computation skipped (missing stop_times/trips/calendar)")
 
-    # Spatial join to sectors
     sectors = gpd.read_file(SECTORS_PATH)
     stops_proj = stops_gdf.to_crs(CRS_LAMBERT)
     sectors_proj = sectors[["id", "geometry"]].to_crs(CRS_LAMBERT)
     joined = gpd.sjoin(stops_proj, sectors_proj, how="left", predicate="within")
     joined = joined.rename(columns={"id": "sector_id"}).drop(columns=["index_right"], errors="ignore")
     print(f"  Transit stops in sectors: {joined['sector_id'].notna().sum():,}")
-
     return joined.to_crs(CRS_WGS84)
 
 
-def _compute_frequency(
-    stop_times_path: Path,
-    trips_path: Path,
-    calendar_path: Path,
-) -> pd.DataFrame:
-    """
-    Compute departures/hour per stop for a representative Monday.
-    Returns DataFrame with stop_id, freq_peak (7-9h), freq_allday (6-22h).
-    """
+def _compute_frequency(stop_times_path, trips_path, calendar_path) -> pd.DataFrame:
     print("  Computing transit frequency …")
-
     calendar = pd.read_csv(calendar_path)
-    # Pick service_ids active on Monday
-    monday_services = set(
-        calendar[calendar["monday"] == 1]["service_id"].astype(str)
-    )
+    monday_services = set(calendar[calendar["monday"] == 1]["service_id"].astype(str))
     if not monday_services:
-        print("  ⚠  No Monday services in calendar — using all services")
         monday_services = set(calendar["service_id"].astype(str))
 
     trips = pd.read_csv(trips_path, usecols=["trip_id", "service_id"])
     trips["service_id"] = trips["service_id"].astype(str)
     monday_trips = set(trips[trips["service_id"].isin(monday_services)]["trip_id"])
 
-    # Load stop_times (may be large — read in chunks)
     chunks = []
-    for chunk in pd.read_csv(
-        stop_times_path,
-        usecols=["trip_id", "stop_id", "departure_time"],
-        chunksize=500_000,
-    ):
-        chunk = chunk[chunk["trip_id"].isin(monday_trips)]
-        chunks.append(chunk)
-
+    for chunk in pd.read_csv(stop_times_path,
+                              usecols=["trip_id", "stop_id", "departure_time"],
+                              chunksize=500_000):
+        chunks.append(chunk[chunk["trip_id"].isin(monday_trips)])
     if not chunks:
-        print("  ⚠  No stop_times matched Monday trips")
         return pd.DataFrame(columns=["stop_id", "freq_peak", "freq_allday"])
 
     st = pd.concat(chunks, ignore_index=True)
 
-    # Parse HH:MM:SS (GTFS allows hours ≥ 24)
-    def _to_minutes(t: str) -> float:
+    def _to_min(t):
         try:
             h, m, _ = str(t).split(":")
             return int(h) * 60 + int(m)
         except Exception:
             return float("nan")
 
-    st["min_of_day"] = st["departure_time"].apply(_to_minutes)
-
-    # Peak: 7:00–9:00 (420–540 min) → departures per 2-hour window
+    st["min_of_day"] = st["departure_time"].apply(_to_min)
     peak = st[(st["min_of_day"] >= 420) & (st["min_of_day"] < 540)]
-    allday = st[(st["min_of_day"] >= 360) & (st["min_of_day"] < 1320)]  # 6h–22h = 16h
-
-    freq_peak = peak.groupby("stop_id").size().rename("freq_peak")
-    freq_allday = allday.groupby("stop_id").size().rename("freq_allday")
-
-    freq = freq_peak.to_frame().join(freq_allday, how="outer").fillna(0).astype(int).reset_index()
+    allday = st[(st["min_of_day"] >= 360) & (st["min_of_day"] < 1320)]
+    freq = (
+        peak.groupby("stop_id").size().rename("freq_peak")
+        .to_frame()
+        .join(allday.groupby("stop_id").size().rename("freq_allday"), how="outer")
+        .fillna(0).astype(int).reset_index()
+    )
     print(f"  Frequency computed for {len(freq):,} stops")
     return freq
-
-
-# ---------------------------------------------------------------------------
-# Per-sector aggregate table
-# ---------------------------------------------------------------------------
-
-def build_amenity_table(pois: gpd.GeoDataFrame) -> pd.DataFrame:
-    """Wide table: sector_id × category → count."""
-    counts = (
-        pois[pois["sector_id"].notna()]
-        .groupby(["sector_id", "category"])
-        .size()
-        .unstack(fill_value=0)
-        .reset_index()
-    )
-    return counts
 
 
 # ---------------------------------------------------------------------------
@@ -354,59 +342,50 @@ def main() -> None:
     DATA_PROCESSED.mkdir(parents=True, exist_ok=True)
 
     if OUT_POIS.exists() and OUT_AMENITIES.exists():
-        print(f"  ✓ {OUT_POIS.name} and {OUT_AMENITIES.name} already exist — delete to regenerate")
+        print(f"  ✓ {OUT_POIS.name} already exists — delete to regenerate")
         return
 
+    if not PBF_BELGIUM.exists():
+        raise FileNotFoundError(f"PBF not found: {PBF_BELGIUM}\nRun: python 01_download.py")
+
     if not SECTORS_PATH.exists():
-        raise FileNotFoundError("Run 02_sectors.py first — sectors.geojson missing")
+        raise FileNotFoundError("sectors.geojson missing — run 02_sectors.py first")
 
-    pbf_path = DATA_RAW / "belgium-latest.osm.pbf"
-    if not pbf_path.exists():
-        raise FileNotFoundError(
-            f"PBF not found: {pbf_path}\n"
-            "Run: python 01_download.py"
-        )
+    osmium = _require_osmium()
+    print(f"  osmium: {osmium}")
 
-    print("─── Extracting OSM POIs ───")
-    raw_pois = _load_pois_from_pbf(pbf_path)
+    print("\n─── Step 1: Extract Brussels from Belgium PBF ───")
+    extract_brussels(osmium)
 
-    print("\n─── Converting geometries to points ───")
-    raw_pois = _to_points(raw_pois)
+    print("\n─── Step 2: Export POIs to GeoJSON ───")
+    export_geojson(osmium)
 
-    print("\n─── Assigning categories ───")
-    pois = categorise(raw_pois)
+    print("\n─── Step 3: Categorise & filter ───")
+    pois = load_and_categorise()
 
-    print("\n─── Applying area gates ───")
-    pois = apply_area_gates(pois)
-
-    # Category summary
     print("\n─── Category counts ───")
-    counts = pois["category"].value_counts()
-    for cat, n in counts.items():
-        flag = "⚠  low-confidence" if cat in LOW_CONFIDENCE_CATEGORIES else ""
-        print(f"  {cat:<18} {n:>5}  {flag}")
+    for cat, n in pois["category"].value_counts().items():
+        flag = "  ⚠  low-confidence" if cat in LOW_CONFIDENCE_CATEGORIES else ""
+        print(f"  {cat:<18} {n:>5}{flag}")
 
-    print("\n─── Spatial join to sectors ───")
+    print("\n─── Step 4: Spatial join to sectors ───")
     sectors = gpd.read_file(SECTORS_PATH)
     pois = join_to_sectors(pois, sectors)
 
-    print(f"\n─── Saving {OUT_POIS.name} ───")
-    keep_cols = ["category", "sector_id", "name", "name:fr", "name:nl",
-                 "area_m2", "geometry"]
-    keep = [c for c in keep_cols if c in pois.columns]
+    keep = [c for c in ["category", "sector_id", "name", "name:fr", "name:nl", "area_m2", "geometry"]
+            if c in pois.columns]
     pois[keep].to_file(OUT_POIS, driver="GeoJSON")
-    print(f"  ✓ {len(pois):,} POIs written")
+    print(f"\n  ✓ {len(pois):,} POIs → {OUT_POIS.name}")
 
-    print(f"\n─── Building sector amenity table ───")
     amenity_table = build_amenity_table(pois)
     amenity_table.to_csv(OUT_AMENITIES, index=False)
     print(f"  ✓ {OUT_AMENITIES.name}: {len(amenity_table)} sectors × {len(amenity_table.columns) - 1} categories")
 
-    print("\n─── Processing STIB GTFS ───")
+    print("\n─── Step 5: STIB GTFS transit ───")
     transit = process_stib_gtfs()
     if transit is not None:
         transit.to_file(OUT_TRANSIT, driver="GeoJSON")
-        print(f"  ✓ {len(transit):,} transit stops written")
+        print(f"  ✓ {len(transit):,} transit stops → {OUT_TRANSIT.name}")
 
     print("\nNext: python 04_graph.py")
 

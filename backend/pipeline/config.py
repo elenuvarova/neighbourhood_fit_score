@@ -42,12 +42,12 @@ DOWNLOAD_SOURCES: dict[str, tuple[str | None, str]] = {
     ),
     "statbel_sectors": (
         "https://statbel.fgov.be/sites/default/files/files/opendata/"
-        "statistische%20sectoren/sh_statbel_statistical_sectors_31370_20240101.sqlite.zip",
+        "Statistische%20sectoren/sh_statbel_statistical_sectors_31370_20240101.sqlite.zip",
         "statbel_sectors.zip",
     ),
     "statbel_population": (
         "https://statbel.fgov.be/sites/default/files/files/opendata/"
-        "bevolking%20naar%20wijk/OPENDATA_SECTOREN_2024.zip",
+        "bevolking/sectoren/OPENDATA_SECTOREN_2024.zip",
         "statbel_population.zip",
     ),
     "stib_gtfs": (

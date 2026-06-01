@@ -32,11 +32,14 @@ OUT = DATA_PROCESSED / "sectors.geojson"
 # ---------------------------------------------------------------------------
 
 def _find_sqlite(directory: Path) -> Path | None:
+    # rglob because the zip may extract to a subdirectory; is_file() skips dirs named *.sqlite
     candidates = [
-        p for p in directory.glob("*.sqlite")
-        if "statbel" in p.name.lower() or "sector" in p.name.lower()
+        p for p in directory.rglob("*.sqlite")
+        if p.is_file() and ("statbel" in p.name.lower() or "sector" in p.name.lower())
     ]
-    return candidates[0] if candidates else next(iter(directory.glob("*.sqlite")), None)
+    return candidates[0] if candidates else next(
+        (p for p in directory.rglob("*.sqlite") if p.is_file()), None
+    )
 
 
 def load_sectors() -> gpd.GeoDataFrame:
@@ -58,19 +61,24 @@ def load_sectors() -> gpd.GeoDataFrame:
             "File:   sh_statbel_statistical_sectors_31370_20240101.sqlite.zip"
         )
 
-    print(f"  Loading: {sqlite_path.name}")
-    gdf = gpd.read_file(sqlite_path)
+    # Derive layer name from file name (SpatiaLite stores layers by name)
+    layer_name = sqlite_path.stem
+    print(f"  Loading: {sqlite_path.name}  layer={layer_name}")
+    gdf = gpd.read_file(sqlite_path, layer=layer_name)
+    # Normalise column names to lower for consistent handling
+    gdf.columns = [c.lower() for c in gdf.columns]
     print(f"  Columns: {list(gdf.columns)}")
     print(f"  Total sectors (Belgium): {len(gdf):,}")
 
-    if "CD_MUNTY_REFNIS" not in gdf.columns:
+    munty_col = "cd_munty_refnis"
+    if munty_col not in gdf.columns:
         raise ValueError(
-            f"Expected column 'CD_MUNTY_REFNIS' not found.\n"
+            f"Expected column '{munty_col}' not found.\n"
             f"Available columns: {list(gdf.columns)}\n"
             "Update this script with the correct column name."
         )
 
-    gdf["_refnis_int"] = pd.to_numeric(gdf["CD_MUNTY_REFNIS"], errors="coerce").astype("Int64")
+    gdf["_refnis_int"] = pd.to_numeric(gdf[munty_col], errors="coerce").astype("Int64")
     brussels = gdf[gdf["_refnis_int"].isin(BRUSSELS_REFNIS)].drop(columns=["_refnis_int"]).copy()
     print(f"  Brussels sectors: {len(brussels):,}  (expected 724)")
 
@@ -139,7 +147,8 @@ def join_population(sectors: gpd.GeoDataFrame) -> gpd.GeoDataFrame:
     df.columns = [c.strip().upper() for c in df.columns]
     print(f"  Columns: {list(df.columns)}")
 
-    # Locate join key (sector code)
+    # Locate join key (sector code) — check both upper and lower case
+    df.columns = [c.strip().upper() for c in df.columns]
     join_key = next(
         (c for c in ["CD_SECTOR", "CDSECTOR", "SECTOR_CD", "SECTOR"] if c in df.columns),
         None,
@@ -166,11 +175,12 @@ def join_population(sectors: gpd.GeoDataFrame) -> gpd.GeoDataFrame:
 
     pop = (
         df[[join_key, pop_col]]
-        .rename(columns={join_key: "CD_SECTOR", pop_col: "population"})
-        .assign(CD_SECTOR=lambda x: x["CD_SECTOR"].astype(str).str.strip())
+        .rename(columns={join_key: "cd_sector", pop_col: "population"})
+        .assign(cd_sector=lambda x: x["cd_sector"].astype(str).str.strip())
     )
 
-    out = sectors.merge(pop, on="CD_SECTOR", how="left")
+    # sectors has lowercase 'cd_sector' at this point (pre-rename)
+    out = sectors.merge(pop, on="cd_sector", how="left")
     matched = out["population"].notna().sum()
     print(f"  Joined: {matched}/{len(out)} sectors have population data")
     return out
@@ -194,24 +204,24 @@ def main() -> None:
     print("\n─── Joining population ───")
     sectors = join_population(sectors)
 
-    # Standardise output schema
+    # Standardise output schema (SpatiaLite columns are lowercase)
     col_map = {
-        "CD_SECTOR":            "id",
-        "TX_SECTOR_DESCR_FR":   "name_fr",
-        "TX_SECTOR_DESCR_NL":   "name_nl",
-        "CD_MUNTY_REFNIS":      "cd_munty_refnis",
-        "MS_AREA_HA":           "area_ha",
+        "cd_sector":            "id",
+        "tx_sector_descr_fr":   "name_fr",
+        "tx_sector_descr_nl":   "name_nl",
+        "cd_munty_refnis":      "cd_munty_refnis",
+        "ms_area_ha":           "area_ha",
         "population":           "population",
     }
     present = {k: v for k, v in col_map.items() if k in sectors.columns}
     sectors = sectors.rename(columns=present)
 
-    # Ensure 'id' exists
+    # Ensure 'id' exists (mapped from 'cd_sector')
     if "id" not in sectors.columns:
         raise RuntimeError(
-            "Column 'CD_SECTOR' not found in Statbel file.\n"
-            f"Available: {list(sectors.columns)}\n"
-            "Update col_map in this script."
+            "Column 'cd_sector' not found in Statbel file.\n"
+            f"Available (after rename): {list(sectors.columns)}\n"
+            "Update col_map in 02_sectors.py."
         )
 
     # Centroid (computed in projected CRS, stored as WGS84 lon/lat)
