@@ -47,7 +47,7 @@ const CATEGORY_LABELS = {
   convenience: "Local shops", transit: "Public transport",
   cafe: "Cafés",              restaurant: "Restaurants",
   coworking: "Coworking",     library: "Libraries",
-  sport: "Sports",
+  sport: "Sports",            dog_park: "Dog parks",
 }
 
 const MAP_LAYERS = [

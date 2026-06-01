@@ -521,12 +521,27 @@ def filter_sectors(
     scores = db.exec(
         select(SectorScore).where(SectorScore.scenario == scenario)
     ).all()
+
+    # Categories not in the scoring breakdown are filtered by POI presence instead
+    score_cats = [c for c in cats if c not in {"dog_park"}]
+    poi_cats   = [c for c in cats if c in {"dog_park"}]
+
+    # Build set of sector_ids that have at least one POI for each poi_cat
+    poi_sector_sets: list[set] = []
+    for poi_cat in poi_cats:
+        ids = {
+            p.sector_id for p in db.exec(
+                select(Poi).where(Poi.category == poi_cat, Poi.sector_id.isnot(None))
+            ).all()
+        }
+        poi_sector_sets.append(ids)
+
     matching = [
         row.sector_id for row in scores
         if row.sector_id in city_sector_ids
-        and row.breakdown and all(
-            float(row.breakdown.get(cat, 0)) >= threshold for cat in cats
-        )
+        and row.breakdown
+        and all(float(row.breakdown.get(cat, 0)) >= threshold for cat in score_cats)
+        and all(row.sector_id in s for s in poi_sector_sets)
     ]
     return {"matching": matching, "total": len(matching)}
 
