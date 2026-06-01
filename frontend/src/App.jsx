@@ -417,6 +417,9 @@ function ImprovementsList({ improvements, onHighlight }) {
           </span>
         </button>
       ))}
+      <p className="imp-map-hint">
+        <span className="imp-dot" /> yellow markers on the map show suggested locations
+      </p>
     </div>
   )
 }
@@ -918,6 +921,20 @@ export default function App() {
           "circle-stroke-width": 2, "circle-stroke-color": "#fff",
           "circle-opacity": 0.9,
         },
+      })
+      const impPopup = new maplibregl.Popup({ closeButton: false, closeOnClick: false, offset: 8 })
+      m.on("mouseenter", "improvements-circles", e => {
+        m.getCanvas().style.cursor = "pointer"
+        const p = e.features?.[0]?.properties
+        if (!p) return
+        const sign = p.delta > 0 ? "+" : ""
+        impPopup.setLngLat(e.lngLat)
+          .setHTML(`<div class="map-popup imp-popup">${p.title}<span class="popup-score">${sign}${p.delta} pts</span></div>`)
+          .addTo(m)
+      })
+      m.on("mouseleave", "improvements-circles", () => {
+        m.getCanvas().style.cursor = ""
+        impPopup.remove()
       })
     }
     if (highlightedImp?.suggested_lat && highlightedImp?.suggested_lng) {
