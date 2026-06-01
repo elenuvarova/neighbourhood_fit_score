@@ -636,7 +636,8 @@ export default function App() {
   const [compareMode, setCompareMode]     = useState(false)
   const [compareResult, setCompareResult] = useState(null)
   const [compareLoading, setCompareLoading] = useState(false)
-  const [filterCats, setFilterCats]       = useState(new Set())
+  const [filterCatsByScenario, setFilterCatsByScenario] = useState({ family: new Set(), senior: new Set(), remote: new Set() })
+  const filterCats = filterCatsByScenario[scenario] ?? new Set()
   const [filterMatching, setFilterMatching] = useState(null)
   const [filterMinScore, setFilterMinScore] = useState(60)
   const [tourStep, setTourStep]           = useState(() =>
@@ -675,18 +676,18 @@ export default function App() {
 
   // ── Filter callbacks ────────────────────────────────────────────────────
   const toggleFilterCat = useCallback((cat) => {
-    setFilterCats(prev => {
-      const next = new Set(prev)
+    setFilterCatsByScenario(prev => {
+      const next = new Set(prev[scenario])
       if (next.has(cat)) next.delete(cat)
       else next.add(cat)
-      return next
+      return { ...prev, [scenario]: next }
     })
-  }, [])
+  }, [scenario])
 
   const clearFilter = useCallback(() => {
-    setFilterCats(new Set())
+    setFilterCatsByScenario(prev => ({ ...prev, [scenario]: new Set() }))
     setFilterMatching(null)
-  }, [])
+  }, [scenario])
 
   // ── City switch ─────────────────────────────────────────────────────────
   const handleCityChange = useCallback((cityConfig) => {
@@ -695,7 +696,7 @@ export default function App() {
     setCompareResult(null)
     setCompareMode(false)
     setCompareAddr("")
-    setFilterCats(new Set())
+    setFilterCatsByScenario({ family: new Set(), senior: new Set(), remote: new Set() })
     setFilterMatching(null)
     setSectorsGeo(null)
     const m = mapInst.current
