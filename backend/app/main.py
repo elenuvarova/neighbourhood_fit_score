@@ -90,16 +90,24 @@ def _find_sector_id(lat: float, lng: float) -> str | None:
 # ---------------------------------------------------------------------------
 
 def _auto_seed():
-    """Run seed.py on startup if the DB is empty (idempotent — skips if data already present)."""
-    import subprocess, sys, os
+    """Seed DB on startup if empty (idempotent — skips if data already present)."""
+    import importlib.util, os, sys
     seed_path = os.path.join(os.path.dirname(__file__), "..", "seed.py")
     if not os.path.exists(seed_path):
+        print("seed.py not found — skipping auto-seed")
         return
     with Session(engine) as s:
         if s.exec(select(Sector)).first():
             return  # already seeded
-    print("db empty — running seed.py …")
-    subprocess.run([sys.executable, seed_path], check=False)
+    print("db empty — seeding …")
+    try:
+        spec = importlib.util.spec_from_file_location("seed", seed_path)
+        mod  = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(mod)
+        mod.main()
+        print("auto-seed complete")
+    except Exception as exc:
+        print(f"auto-seed error: {exc}")
 
 
 @asynccontextmanager
