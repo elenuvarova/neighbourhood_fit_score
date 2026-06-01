@@ -11,8 +11,6 @@ services:
     plan: free
     dockerfilePath: ./Dockerfile
     healthCheckPath: /api/health
-    # Seeds the DB from committed seed files on every deploy (idempotent — skips if already seeded)
-    preDeployCommand: "cd /app/backend && python seed.py"
     envVars:
       - key: PORT
         value: 3001

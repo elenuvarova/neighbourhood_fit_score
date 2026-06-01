@@ -89,10 +89,24 @@ def _find_sector_id(lat: float, lng: float) -> str | None:
 # App lifecycle
 # ---------------------------------------------------------------------------
 
+def _auto_seed():
+    """Run seed.py on startup if the DB is empty (idempotent — skips if data already present)."""
+    import subprocess, sys, os
+    seed_path = os.path.join(os.path.dirname(__file__), "..", "seed.py")
+    if not os.path.exists(seed_path):
+        return
+    with Session(engine) as s:
+        if s.exec(select(Sector)).first():
+            return  # already seeded
+    print("db empty — running seed.py …")
+    subprocess.run([sys.executable, seed_path], check=False)
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     SQLModel.metadata.create_all(engine)
     print(f"db: {db_kind}")
+    _auto_seed()
     with Session(engine) as session:
         _build_spatial_index(session)
     n = len(_sector_ids)
