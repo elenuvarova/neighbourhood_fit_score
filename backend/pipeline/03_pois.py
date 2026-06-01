@@ -304,15 +304,15 @@ def _compute_frequency(stop_times_path, trips_path, calendar_path) -> pd.DataFra
     trips["service_id"] = trips["service_id"].astype(str)
     monday_trips = set(trips[trips["service_id"].isin(monday_services)]["trip_id"])
 
-    chunks = []
-    for chunk in pd.read_csv(stop_times_path,
-                              usecols=["trip_id", "stop_id", "departure_time"],
-                              chunksize=500_000):
-        chunks.append(chunk[chunk["trip_id"].isin(monday_trips)])
-    if not chunks:
+    # engine='python' avoids a C-parser bug with usecols on Python 3.14
+    st_all = pd.read_csv(
+        stop_times_path,
+        usecols=["trip_id", "stop_id", "departure_time"],
+        engine="python",
+    )
+    st = st_all[st_all["trip_id"].isin(monday_trips)].copy()
+    if st.empty:
         return pd.DataFrame(columns=["stop_id", "freq_peak", "freq_allday"])
-
-    st = pd.concat(chunks, ignore_index=True)
 
     def _to_min(t):
         try:
