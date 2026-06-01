@@ -40,6 +40,7 @@ SCORES_FILE      = PROCESSED / "scores.csv"
 IMPS_FILE        = PROCESSED / "improvements.csv"
 NARRATIVES_FILE  = PROCESSED / "narratives.csv"
 TRANSIT_FILE     = PROCESSED / "transit_stops.geojson"
+POIS_MAP_FILE    = PROCESSED / "pois_map.geojson"   # filtered: school/park/pharmacy/cafe/sport
 
 # Scenario weights (mirrors config.py — kept in sync manually)
 _WEIGHTS = {
@@ -198,6 +199,33 @@ def _seed_transit(session: Session, transit_file: Path | None = None) -> int:
     return len(records)
 
 
+def _seed_pois(session: Session, pois_file: Path | None = None) -> int:
+    """Seed map-visible POIs (school/park/pharmacy/cafe/sport) from pois_map.geojson."""
+    path = pois_file or POIS_MAP_FILE
+    if not path.exists():
+        return 0
+    with open(path) as f:
+        gj = json.load(f)
+    records = []
+    for feat in gj["features"]:
+        if feat.get("geometry") is None:
+            continue
+        coords = feat["geometry"]["coordinates"]
+        p = feat.get("properties", {})
+        records.append(Poi(
+            sector_id=str(p["sector_id"]) if p.get("sector_id") else None,
+            category=p.get("category", ""),
+            name=p.get("name") or p.get("name:fr") or p.get("name:nl") or None,
+            lat=round(float(coords[1]), 6),
+            lng=round(float(coords[0]), 6),
+        ))
+    BATCH = 500
+    for i in range(0, len(records), BATCH):
+        session.add_all(records[i : i + BATCH])
+        session.flush()
+    return len(records)
+
+
 def _city_paths(city: str) -> dict:
     """Return file paths for a given city. Brussels uses flat dir; others use subdir."""
     if city == "brussels":
@@ -210,6 +238,7 @@ def _city_paths(city: str) -> dict:
         "improvements": base / "improvements.csv",
         "narratives": base / "narratives.csv",
         "transit":    base / "transit_stops.geojson",
+        "pois_map":   base / "pois_map.geojson",
     }
 
 
@@ -235,6 +264,9 @@ def _seed_city(session: Session, city: str) -> bool:
 
     n_t = _seed_transit(session, paths["transit"])
     print(f"  Transit stops: {n_t}")
+
+    n_p = _seed_pois(session, paths["pois_map"])
+    print(f"  Map POIs:      {n_p}")
     return True
 
 
