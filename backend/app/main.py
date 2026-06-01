@@ -325,6 +325,7 @@ def compare_sectors(
                 "name_fr": sec_a.name_fr,
                 "name_nl": sec_a.name_nl,
                 "municipality": sec_a.cd_munty_refnis,
+                "centroid": {"lat": sec_a.centroid_lat, "lng": sec_a.centroid_lon},
             },
             "score": score_a.score,
             "percentile": score_a.percentile,
@@ -335,6 +336,7 @@ def compare_sectors(
                 "name_fr": sec_b.name_fr,
                 "name_nl": sec_b.name_nl,
                 "municipality": sec_b.cd_munty_refnis,
+                "centroid": {"lat": sec_b.centroid_lat, "lng": sec_b.centroid_lon},
             },
             "score": score_b.score,
             "percentile": score_b.percentile,
@@ -491,6 +493,33 @@ def pois(
             for p in rows
         ],
     }
+
+
+# ---------------------------------------------------------------------------
+# Sector filter — find sectors where all selected categories meet min score
+# ---------------------------------------------------------------------------
+
+@app.get("/api/filter")
+def filter_sectors(
+    scenario: str = Query("family"),
+    categories: str = Query(..., description="Comma-separated category names"),
+    min_score: int = Query(60, ge=0, le=100),
+    db: Session = Depends(get_session),
+):
+    cats = [c.strip() for c in categories.split(",") if c.strip()]
+    if not cats:
+        raise HTTPException(400, detail="At least one category required")
+    threshold = min_score / 100.0
+    scores = db.exec(
+        select(SectorScore).where(SectorScore.scenario == scenario)
+    ).all()
+    matching = [
+        row.sector_id for row in scores
+        if row.breakdown and all(
+            float(row.breakdown.get(cat, 0)) >= threshold for cat in cats
+        )
+    ]
+    return {"matching": matching, "total": len(matching)}
 
 
 # ---------------------------------------------------------------------------

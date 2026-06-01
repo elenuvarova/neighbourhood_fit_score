@@ -12,16 +12,29 @@ const SCENARIOS = [
   { id: "remote", label: "Remote Work" },
 ]
 
+const CITIES = [
+  { id: "brussels", label: "Brussels", center: [4.352, 50.846], zoom: 11 },
+  { id: "antwerp",  label: "Antwerp",  center: [4.402, 51.221], zoom: 12, soon: true },
+  { id: "paris",    label: "Paris",    center: [2.349, 48.864], zoom: 12, soon: true },
+  { id: "london",   label: "London",   center: [-0.118, 51.509], zoom: 11, soon: true },
+]
+
+const FILTER_THRESHOLDS = [
+  { value: 50, label: "Decent" },
+  { value: 60, label: "Good" },
+  { value: 75, label: "Great" },
+]
+
 // Brussels NIS commune codes
 const COMMUNES = {
-  "21001": "Anderlecht",       "21002": "Auderghem",
+  "21001": "Anderlecht",        "21002": "Auderghem",
   "21003": "Berchem-Ste-Agathe","21004": "Brussels",
-  "21005": "Etterbeek",        "21006": "Evere",
-  "21007": "Forest",           "21008": "Ganshoren",
-  "21009": "Ixelles",          "21010": "Jette",
-  "21011": "Koekelberg",       "21012": "Molenbeek",
-  "21013": "Saint-Gilles",     "21014": "Saint-Josse",
-  "21015": "Schaerbeek",       "21016": "Uccle",
+  "21005": "Etterbeek",         "21006": "Evere",
+  "21007": "Forest",            "21008": "Ganshoren",
+  "21009": "Ixelles",           "21010": "Jette",
+  "21011": "Koekelberg",        "21012": "Molenbeek",
+  "21013": "Saint-Gilles",      "21014": "Saint-Josse",
+  "21015": "Schaerbeek",        "21016": "Uccle",
   "21017": "Watermael-Boitsfort","21018": "Woluwe-St-Lambert",
   "21019": "Woluwe-St-Pierre",
 }
@@ -37,7 +50,6 @@ const CATEGORY_LABELS = {
   sport: "Sports",
 }
 
-// POI categories available as map layer toggles
 const MAP_LAYERS = [
   { cat: "school",   color: "#60a5fa", label: "Schools" },
   { cat: "park",     color: "#4ade80", label: "Parks" },
@@ -71,7 +83,54 @@ function scoreColor(score) {
   return "#f87171"
 }
 
+// Read URL params once on module load (before React initialises)
+function readUrlParams() {
+  const p = new URLSearchParams(window.location.search)
+  const s = p.get("scenario")
+  return {
+    sector: p.get("sector"),
+    scenario: s && ["family", "senior", "remote"].includes(s) ? s : null,
+  }
+}
+
 // ── Components ──────────────────────────────────────────────────────────────
+
+function CityPicker({ city, onChange }) {
+  const [open, setOpen] = useState(false)
+  const ref = useRef(null)
+  const current = CITIES.find(c => c.id === city) ?? CITIES[0]
+
+  useEffect(() => {
+    if (!open) return
+    const handler = (e) => {
+      if (ref.current && !ref.current.contains(e.target)) setOpen(false)
+    }
+    document.addEventListener("mousedown", handler)
+    return () => document.removeEventListener("mousedown", handler)
+  }, [open])
+
+  return (
+    <div className="city-picker" ref={ref}>
+      <button className="city-btn" onClick={() => setOpen(o => !o)}>
+        {current.label} <span className="city-caret">▾</span>
+      </button>
+      {open && (
+        <div className="city-dropdown">
+          {CITIES.map(c => (
+            <button
+              key={c.id}
+              className={`city-option${c.id === city ? " active" : ""}${c.soon ? " soon" : ""}`}
+              onClick={() => { if (!c.soon) { onChange(c); setOpen(false) } }}
+            >
+              {c.label}
+              {c.soon && <span className="soon-badge">soon</span>}
+            </button>
+          ))}
+        </div>
+      )}
+    </div>
+  )
+}
 
 function ScenarioTabs({ scenario, onChange }) {
   return (
@@ -84,6 +143,70 @@ function ScenarioTabs({ scenario, onChange }) {
         >
           {s.label}
         </button>
+      ))}
+    </div>
+  )
+}
+
+function PreferenceFilter({ filterCats, onToggle, onClear, filterMatching, minScore, onMinScore }) {
+  const active  = filterCats.size > 0
+  const count   = filterMatching?.length ?? null
+  const loading = active && filterMatching === null
+
+  return (
+    <div className="filter-section">
+      <div className="filter-header">
+        <p className="section-title">Find by amenity</p>
+        {active && (
+          <div className="filter-header-right">
+            <span className="filter-count">{loading ? "…" : `${count} sectors`}</span>
+            <button className="filter-clear" onClick={onClear}>clear</button>
+          </div>
+        )}
+      </div>
+      <div className="filter-chips">
+        {Object.entries(CATEGORY_LABELS).map(([cat, label]) => (
+          <button
+            key={cat}
+            className={`filter-chip${filterCats.has(cat) ? " active" : ""}`}
+            onClick={() => onToggle(cat)}
+          >
+            {label}
+          </button>
+        ))}
+      </div>
+      <div className="filter-threshold">
+        {FILTER_THRESHOLDS.map(t => (
+          <button
+            key={t.value}
+            className={`threshold-btn${minScore === t.value ? " active" : ""}`}
+            onClick={() => onMinScore(t.value)}
+          >
+            {t.label} {t.value}+
+          </button>
+        ))}
+      </div>
+      {active && !loading && count === 0 && (
+        <p className="filter-empty">No sectors match — try a lower threshold.</p>
+      )}
+    </div>
+  )
+}
+
+function MapLegend() {
+  return (
+    <div className="map-legend">
+      <span className="legend-label">Score</span>
+      {[
+        { range: "70+",   color: "#4ade80" },
+        { range: "50–70", color: "#facc15" },
+        { range: "30–50", color: "#f97316" },
+        { range: "0–30",  color: "#dc2626" },
+      ].map(({ range, color }) => (
+        <div key={range} className="legend-item">
+          <span className="legend-swatch" style={{ background: color }} />
+          <span className="legend-range">{range}</span>
+        </div>
       ))}
     </div>
   )
@@ -169,8 +292,6 @@ function WhyPanel({ pros, cons }) {
 function ComparePanel({ cmp, onClose }) {
   const { a, b, deltas, scenario } = cmp
   const scenLabel = SCENARIOS.find(s => s.id === scenario)?.label ?? scenario
-  const aWins = deltas.filter(d => d.winner === "a").length
-  const bWins = deltas.filter(d => d.winner === "b").length
 
   return (
     <div className="compare-panel">
@@ -179,19 +300,14 @@ function ComparePanel({ cmp, onClose }) {
         <button className="compare-close" onClick={onClose}>✕</button>
       </div>
 
-      {/* Score summary row */}
       <div className="compare-scores">
         {[
           { side: "a", sec: a.sector, score: a.score, pct: a.percentile },
           { side: "b", sec: b.sector, score: b.score, pct: b.percentile },
         ].map(({ side, sec, score, pct }) => (
           <div key={side} className={`compare-side compare-side-${side}`}>
-            <span className="compare-sector-name">
-              {sec.name_fr || sec.id}
-            </span>
-            <span className="compare-score" style={{ color: scoreColor(score) }}>
-              {score}
-            </span>
+            <span className="compare-sector-name">{sec.name_fr || sec.id}</span>
+            <span className="compare-score" style={{ color: scoreColor(score) }}>{score}</span>
             <span className="compare-pct">top {Math.max(1, 100 - pct)}%</span>
           </div>
         ))}
@@ -207,7 +323,6 @@ function ComparePanel({ cmp, onClose }) {
         )}
       </p>
 
-      {/* Per-category deltas */}
       <div className="compare-deltas">
         {deltas.slice(0, 10).map(d => {
           const label = CATEGORY_LABELS[d.category] ?? d.category
@@ -242,11 +357,7 @@ function ImprovementsList({ improvements, onHighlight }) {
     <div className="improvements">
       <p className="section-title">How to improve</p>
       {improvements.map(imp => (
-        <button
-          key={imp.rank}
-          className="imp-item"
-          onClick={() => onHighlight?.(imp)}
-        >
+        <button key={imp.rank} className="imp-item" onClick={() => onHighlight?.(imp)}>
           <span className="imp-title">{imp.title}</span>
           <span className="imp-meta">
             {imp.from_score} → {imp.to_score}
@@ -308,14 +419,10 @@ function MapLayerToggles({ sectorId, mapInst, mapReady }) {
     }
     if (!m.getLayer(layerId)) {
       m.addLayer({
-        id: layerId,
-        type: "circle",
-        source: srcId,
+        id: layerId, type: "circle", source: srcId,
         paint: {
-          "circle-radius": 5,
-          "circle-color": color,
-          "circle-stroke-width": 1.5,
-          "circle-stroke-color": "#fff",
+          "circle-radius": 5, "circle-color": color,
+          "circle-stroke-width": 1.5, "circle-stroke-color": "#fff",
           "circle-opacity": 0.88,
         },
       })
@@ -342,17 +449,17 @@ function MapLayerToggles({ sectorId, mapInst, mapReady }) {
   )
 }
 
-function GrokPanel({ sectorId, scenario }) {
+function GroqPanel({ sectorId, scenario }) {
   const [question, setQuestion] = useState("")
   const [answer, setAnswer]     = useState("")
   const [streaming, setStreaming] = useState(false)
-  const [grokError, setGrokError] = useState(null)
+  const [groqError, setGroqError] = useState(null)
   const abortRef = useRef(null)
 
   const ask = async () => {
     const q = question.trim()
     setAnswer("")
-    setGrokError(null)
+    setGroqError(null)
     setStreaming(true)
     if (abortRef.current) abortRef.current.abort()
     const ctrl = new AbortController()
@@ -393,7 +500,7 @@ function GrokPanel({ sectorId, scenario }) {
         }
       }
     } catch (e) {
-      if (e.name !== "AbortError") setGrokError(e.message)
+      if (e.name !== "AbortError") setGroqError(e.message)
     } finally {
       setStreaming(false)
     }
@@ -401,7 +508,7 @@ function GrokPanel({ sectorId, scenario }) {
 
   return (
     <div className="grok-panel">
-      <p className="section-title">Ask Grok</p>
+      <p className="section-title">Ask Groq</p>
       <div className="grok-input-row">
         <input
           className="address-input grok-input"
@@ -411,15 +518,11 @@ function GrokPanel({ sectorId, scenario }) {
           onKeyDown={e => e.key === "Enter" && !streaming && ask()}
           disabled={streaming}
         />
-        <button
-          className="search-btn grok-btn"
-          onClick={ask}
-          disabled={streaming}
-        >
+        <button className="search-btn grok-btn" onClick={ask} disabled={streaming}>
           {streaming ? "…" : "Ask"}
         </button>
       </div>
-      {grokError && <p className="error-msg">{grokError}</p>}
+      {groqError && <p className="error-msg">{groqError}</p>}
       {(answer || streaming) && (
         <div className={`grok-answer${streaming ? " streaming" : ""}`}>
           {answer}
@@ -454,8 +557,12 @@ function DisclosureFooter({ disclosure }) {
 // ── Main App ─────────────────────────────────────────────────────────────────
 
 export default function App() {
+  // Read URL params once before first render
+  const urlParams = useRef(readUrlParams())
+
+  const [city, setCity]                   = useState("brussels")
   const [addressInput, setAddressInput]   = useState("")
-  const [scenario, setScenario]           = useState("family")
+  const [scenario, setScenario]           = useState(urlParams.current.scenario ?? "family")
   const [loading, setLoading]             = useState(false)
   const [error, setError]                 = useState(null)
   const [result, setResult]               = useState(null)
@@ -466,17 +573,48 @@ export default function App() {
   const [compareMode, setCompareMode]     = useState(false)
   const [compareResult, setCompareResult] = useState(null)
   const [compareLoading, setCompareLoading] = useState(false)
+  const [filterCats, setFilterCats]       = useState(new Set())
+  const [filterMatching, setFilterMatching] = useState(null)
+  const [filterMinScore, setFilterMinScore] = useState(60)
 
-  const mapContainer       = useRef(null)
-  const mapInst            = useRef(null)
-  const geoCache           = useRef({})
-  const isFirstRender      = useRef(true)
-  // Stable refs so map event handlers always see current state
-  const compareModeRef     = useRef(false)
-  const resultRef          = useRef(null)
-  const scenarioRef        = useRef("family")
-  const fetchBySectorIdRef = useRef(null)
-  const fetchCompareByRef  = useRef(null)
+  const mapContainer          = useRef(null)
+  const mapInst               = useRef(null)
+  const geoCache              = useRef({})
+  const isFirstRender         = useRef(true)
+  const initialSectorLoaded   = useRef(false)
+  const compareModeRef        = useRef(false)
+  const resultRef             = useRef(null)
+  const scenarioRef           = useRef(urlParams.current.scenario ?? "family")
+  const fetchBySectorIdRef    = useRef(null)
+  const fetchCompareByRef     = useRef(null)
+
+  // ── Filter callbacks ────────────────────────────────────────────────────
+  const toggleFilterCat = useCallback((cat) => {
+    setFilterCats(prev => {
+      const next = new Set(prev)
+      if (next.has(cat)) next.delete(cat)
+      else next.add(cat)
+      return next
+    })
+  }, [])
+
+  const clearFilter = useCallback(() => {
+    setFilterCats(new Set())
+    setFilterMatching(null)
+  }, [])
+
+  // ── City switch ─────────────────────────────────────────────────────────
+  const handleCityChange = useCallback((cityConfig) => {
+    setCity(cityConfig.id)
+    setResult(null)
+    setCompareResult(null)
+    setCompareMode(false)
+    setCompareAddr("")
+    setFilterCats(new Set())
+    setFilterMatching(null)
+    const m = mapInst.current
+    if (m) m.flyTo({ center: cityConfig.center, zoom: cityConfig.zoom, duration: 1200 })
+  }, [])
 
   // ── Init map ────────────────────────────────────────────────────────────
   useEffect(() => {
@@ -557,7 +695,6 @@ export default function App() {
       paint: { "line-color": "#a78bfa", "line-width": 3, "line-opacity": 1 },
     })
 
-    // Hover popup
     const popup = new maplibregl.Popup({ closeButton: false, closeOnClick: false, offset: 6 })
     m.on("mousemove", "sectors-fill", e => {
       const feat = e.features?.[0]
@@ -572,7 +709,6 @@ export default function App() {
       popup.remove()
       m.getCanvas().style.cursor = ""
     })
-
     m.on("click", "sectors-fill", e => {
       const id = e.features?.[0]?.properties?.id
       if (!id) return
@@ -587,6 +723,51 @@ export default function App() {
     })
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [mapReady, sectorsGeo])
+
+  // ── Filter highlight layers ─────────────────────────────────────────────
+  useEffect(() => {
+    const m = mapInst.current
+    if (!mapReady || !m || !m.getSource("sectors")) return
+
+    if (m.getLayer("filter-match"))   m.removeLayer("filter-match")
+    if (m.getLayer("filter-overlay")) m.removeLayer("filter-overlay")
+
+    if (filterMatching === null) return
+
+    const beforeId = m.getLayer("sector-selected") ? "sector-selected" : undefined
+
+    m.addLayer({
+      id: "filter-overlay",
+      type: "fill",
+      source: "sectors",
+      paint: { "fill-color": "#000000", "fill-opacity": 0.62 },
+    }, beforeId)
+
+    m.addLayer({
+      id: "filter-match",
+      type: "fill",
+      source: "sectors",
+      filter: ["in", ["get", "id"], ["literal", filterMatching]],
+      paint: { "fill-color": "#4ade80", "fill-opacity": 0.78 },
+    }, beforeId)
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [mapReady, filterMatching, sectorsGeo])
+
+  // ── Fetch filter results ────────────────────────────────────────────────
+  useEffect(() => {
+    if (filterCats.size === 0) {
+      setFilterMatching(null)
+      return
+    }
+    setFilterMatching(null) // reset while loading new results
+    let cancelled = false
+    const cats = [...filterCats].join(",")
+    fetch(`${API}/api/filter?scenario=${scenario}&categories=${cats}&min_score=${filterMinScore}`)
+      .then(r => r.json())
+      .then(data => { if (!cancelled) setFilterMatching(data.matching) })
+      .catch(() => { if (!cancelled) setFilterMatching([]) })
+    return () => { cancelled = true }
+  }, [filterCats, scenario, filterMinScore])
 
   // ── Highlight selected sector ───────────────────────────────────────────
   useEffect(() => {
@@ -609,6 +790,19 @@ export default function App() {
     if (!mapReady || !m?.getLayer("sector-compare-b")) return
     const id = compareResult?.b?.sector?.id ?? ""
     m.setFilter("sector-compare-b", ["==", ["get", "id"], id])
+  }, [mapReady, compareResult])
+
+  // ── Fit map to show both sectors when compare loads ─────────────────────
+  useEffect(() => {
+    const m = mapInst.current
+    if (!mapReady || !m || !compareResult) return
+    const ca = compareResult.a.sector.centroid
+    const cb = compareResult.b.sector.centroid
+    if (!ca || !cb) return
+    const bounds = new maplibregl.LngLatBounds()
+    bounds.extend([ca.lng, ca.lat])
+    bounds.extend([cb.lng, cb.lat])
+    m.fitBounds(bounds, { padding: 100, maxZoom: 14, duration: 900 })
   }, [mapReady, compareResult])
 
   // ── Improvement markers layer ───────────────────────────────────────────
@@ -634,19 +828,15 @@ export default function App() {
     } else {
       m.addSource("improvements", { type: "geojson", data: geojson })
       m.addLayer({
-        id: "improvements-circles",
-        type: "circle",
-        source: "improvements",
+        id: "improvements-circles", type: "circle", source: "improvements",
         paint: {
           "circle-radius": ["case", ["get", "highlighted"], 12, 8],
           "circle-color": "#facc15",
-          "circle-stroke-width": 2,
-          "circle-stroke-color": "#fff",
+          "circle-stroke-width": 2, "circle-stroke-color": "#fff",
           "circle-opacity": 0.9,
         },
       })
     }
-    // Fly to highlighted improvement
     if (highlightedImp?.suggested_lat && highlightedImp?.suggested_lng) {
       m.easeTo({
         center: [highlightedImp.suggested_lng, highlightedImp.suggested_lat],
@@ -656,6 +846,23 @@ export default function App() {
     }
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [mapReady, result, highlightedImp])
+
+  // ── Sync URL state ──────────────────────────────────────────────────────
+  useEffect(() => {
+    if (!result) return
+    const params = new URLSearchParams()
+    params.set("sector", result.sector.id)
+    params.set("scenario", scenario)
+    history.replaceState(null, "", `?${params}`)
+  }, [result, scenario])
+
+  // ── Auto-load sector from URL on map ready ──────────────────────────────
+  useEffect(() => {
+    if (!mapReady || initialSectorLoaded.current) return
+    initialSectorLoaded.current = true
+    const { sector } = urlParams.current
+    if (sector) fetchBySectorIdRef.current(sector)
+  }, [mapReady])
 
   // ── Re-fetch on scenario change ─────────────────────────────────────────
   useEffect(() => {
@@ -748,16 +955,16 @@ export default function App() {
   }
 
   // Keep refs in sync on every render
-  compareModeRef.current    = compareMode
-  resultRef.current         = result
-  scenarioRef.current       = scenario
+  compareModeRef.current     = compareMode
+  resultRef.current          = result
+  scenarioRef.current        = scenario
   fetchBySectorIdRef.current = fetchBySectorId
   fetchCompareByRef.current  = fetchCompareById
 
   // ── Render ──────────────────────────────────────────────────────────────
-  const communeName = result ? COMMUNES[result.sector.municipality] : null
+  const communeName   = result ? COMMUNES[result.sector.municipality] : null
   const scenarioLabel = SCENARIOS.find(s => s.id === scenario)?.label
-  const topPct = result ? Math.max(1, Math.round(100 - result.percentile)) : null
+  const topPct        = result ? Math.max(1, Math.round(100 - result.percentile)) : null
 
   return (
     <div className="app">
@@ -766,11 +973,21 @@ export default function App() {
         <div className="panel-header">
           <span className="logo-dot" />
           <span className="logo-text">Neighbourhood Fit</span>
-          <span className="logo-city">Brussels</span>
+          <CityPicker city={city} onChange={handleCityChange} />
         </div>
 
         {/* Scenario tabs */}
         <ScenarioTabs scenario={scenario} onChange={setScenario} />
+
+        {/* Preference filter */}
+        <PreferenceFilter
+          filterCats={filterCats}
+          onToggle={toggleFilterCat}
+          onClear={clearFilter}
+          filterMatching={filterMatching}
+          minScore={filterMinScore}
+          onMinScore={setFilterMinScore}
+        />
 
         {/* Search */}
         <div className="search-row">
@@ -789,20 +1006,22 @@ export default function App() {
         {error && <p className="error-msg">{error}</p>}
 
         {!result && !loading && (
-          <p className="hint">Enter an address above or click any sector on the map.</p>
+          <p className="hint">
+            {filterCats.size > 0
+              ? "Matching sectors are highlighted green. Click one to explore."
+              : "Enter an address above or click any sector on the map."}
+          </p>
         )}
 
         {loading && <div className="skeleton-block" />}
 
         {result && !loading && (
           <div className="results">
-            {/* Sector name */}
             <div className="sector-name">
               {result.sector.name_fr || result.sector.id}
               {communeName && <span className="sector-muni"> · {communeName}</span>}
             </div>
 
-            {/* Score card */}
             <div className="score-card">
               <ScoreRing score={result.score} />
               <div className="score-meta">
@@ -816,21 +1035,12 @@ export default function App() {
               </div>
             </div>
 
-            {/* AI narrative (if generated) */}
             <NarrativeBlock narrative={result.narrative} />
-
-            {/* Pros / cons */}
             <WhyPanel pros={result.pros} cons={result.cons} />
+            <GroqPanel sectorId={result.sector.id} scenario={scenario} />
 
-            {/* Live Grok Q&A */}
-            <GrokPanel sectorId={result.sector.id} scenario={scenario} />
-
-            {/* Compare mode */}
             {!compareMode && !compareResult && (
-              <button
-                className="compare-trigger"
-                onClick={() => setCompareMode(true)}
-              >
+              <button className="compare-trigger" onClick={() => setCompareMode(true)}>
                 Compare with another address ↔
               </button>
             )}
@@ -870,14 +1080,8 @@ export default function App() {
               />
             )}
 
-            {/* POI layer toggles */}
-            <MapLayerToggles
-              sectorId={result.sector.id}
-              mapInst={mapInst}
-              mapReady={mapReady}
-            />
+            <MapLayerToggles sectorId={result.sector.id} mapInst={mapInst} mapReady={mapReady} />
 
-            {/* Improvements */}
             <ImprovementsList
               improvements={result.improvements}
               onHighlight={imp => setHighlightedImp(
@@ -885,18 +1089,17 @@ export default function App() {
               )}
             />
 
-            {/* Category breakdown */}
             <p className="section-title">Category breakdown</p>
             <CategoryBars breakdown={result.breakdown} scenario={scenario} />
-
-            {/* Disclosure */}
             <DisclosureFooter disclosure={result.disclosure} />
           </div>
         )}
       </aside>
 
       {/* Map */}
-      <div className="map-wrap" ref={mapContainer} />
+      <div className="map-wrap" ref={mapContainer}>
+        <MapLegend />
+      </div>
     </div>
   )
 }
