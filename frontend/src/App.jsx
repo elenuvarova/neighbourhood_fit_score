@@ -425,37 +425,20 @@ function ImprovementsList({ improvements, onHighlight }) {
 
 function MapLayerToggles({ sectorId, mapInst, mapReady }) {
   const [active, setActive] = useState(new Set())
+  const activeRef = useRef(new Set())
   const cache = useRef({})
 
-  useEffect(() => {
+  useEffect(() => { activeRef.current = active }, [active])
+
+  const _addLayer = useCallback(async (cat, color, sid) => {
     const m = mapInst.current
     if (!m) return
-    MAP_LAYERS.forEach(({ cat }) => {
-      if (m.getLayer(`poi-${cat}`)) m.removeLayer(`poi-${cat}`)
-      if (m.getSource(`poi-src-${cat}`)) m.removeSource(`poi-src-${cat}`)
-    })
-    setActive(new Set())
-  }, [sectorId, mapInst])
-
-  const toggle = async (cat, color) => {
-    const m = mapInst.current
-    if (!m || !mapReady) return
-    const key = `${sectorId}_${cat}`
-    const layerId = `poi-${cat}`
-    const srcId = `poi-src-${cat}`
-
-    if (active.has(cat)) {
-      if (m.getLayer(layerId)) m.removeLayer(layerId)
-      if (m.getSource(srcId)) m.removeSource(srcId)
-      setActive(prev => { const s = new Set(prev); s.delete(cat); return s })
-      return
-    }
-
+    const key = `${sid}_${cat}`
     let features = cache.current[key]
     if (!features) {
       try {
         const data = await fetch(
-          `${API}/api/pois?sector_id=${sectorId}&categories=${cat}`
+          `${API}/api/pois?sector_id=${sid}&categories=${cat}`
         ).then(r => r.json())
         features = (data.pois ?? []).map(p => ({
           type: "Feature",
@@ -465,11 +448,11 @@ function MapLayerToggles({ sectorId, mapInst, mapReady }) {
         cache.current[key] = features
       } catch (_) { return }
     }
-
-    if (!m.getSource(srcId)) {
+    const srcId = `poi-src-${cat}`
+    const layerId = `poi-${cat}`
+    if (!m.getSource(srcId))
       m.addSource(srcId, { type: "geojson", data: { type: "FeatureCollection", features } })
-    }
-    if (!m.getLayer(layerId)) {
+    if (!m.getLayer(layerId))
       m.addLayer({
         id: layerId, type: "circle", source: srcId,
         paint: {
@@ -478,8 +461,32 @@ function MapLayerToggles({ sectorId, mapInst, mapReady }) {
           "circle-opacity": 0.88,
         },
       })
+  }, [mapInst])
+
+  // When sector changes: remove old layers, re-add any that were active
+  useEffect(() => {
+    const m = mapInst.current
+    if (!m || !mapReady) return
+    MAP_LAYERS.forEach(({ cat }) => {
+      if (m.getLayer(`poi-${cat}`)) m.removeLayer(`poi-${cat}`)
+      if (m.getSource(`poi-src-${cat}`)) m.removeSource(`poi-src-${cat}`)
+    })
+    MAP_LAYERS.forEach(({ cat, color }) => {
+      if (activeRef.current.has(cat)) _addLayer(cat, color, sectorId)
+    })
+  }, [sectorId, mapReady, _addLayer])
+
+  const toggle = async (cat, color) => {
+    const m = mapInst.current
+    if (!m || !mapReady) return
+    if (active.has(cat)) {
+      if (m.getLayer(`poi-${cat}`)) m.removeLayer(`poi-${cat}`)
+      if (m.getSource(`poi-src-${cat}`)) m.removeSource(`poi-src-${cat}`)
+      setActive(prev => { const s = new Set(prev); s.delete(cat); return s })
+    } else {
+      await _addLayer(cat, color, sectorId)
+      setActive(prev => new Set([...prev, cat]))
     }
-    setActive(prev => new Set([...prev, cat]))
   }
 
   return (
