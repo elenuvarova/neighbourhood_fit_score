@@ -244,14 +244,8 @@ def _sector_score_response(
 # Trade-off comparison between two sectors
 # ---------------------------------------------------------------------------
 
-_CAT_LABELS: dict[str, str] = {
-    "school": "schools", "childcare": "childcare", "playground": "playgrounds",
-    "park": "parks", "pharmacy": "pharmacies", "gp": "GP clinics",
-    "hospital": "hospitals", "supermarket": "supermarkets",
-    "convenience": "local shops", "transit": "public transport",
-    "cafe": "cafés", "restaurant": "restaurants", "library": "libraries",
-    "sport": "sports facilities", "coworking": "coworking spaces",
-}
+# Same label set used by /api/explain — kept as a single source of truth.
+_CAT_LABELS = _EXPLAIN_CAT_LABELS
 
 
 def _tradeoff_narrative(

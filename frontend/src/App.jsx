@@ -105,13 +105,19 @@ function CityPicker({ city, onChange }) {
     const handler = (e) => {
       if (ref.current && !ref.current.contains(e.target)) setOpen(false)
     }
+    const onKey = (e) => { if (e.key === "Escape") setOpen(false) }
     document.addEventListener("mousedown", handler)
-    return () => document.removeEventListener("mousedown", handler)
+    document.addEventListener("keydown", onKey)
+    return () => {
+      document.removeEventListener("mousedown", handler)
+      document.removeEventListener("keydown", onKey)
+    }
   }, [open])
 
   return (
     <div className="city-picker" ref={ref}>
-      <button className="city-btn" onClick={() => setOpen(o => !o)}>
+      <button className="city-btn" onClick={() => setOpen(o => !o)}
+              aria-haspopup="listbox" aria-expanded={open}>
         {current.label} <span className="city-caret">▾</span>
       </button>
       {open && (
@@ -270,7 +276,8 @@ function ScoreRing({ score }) {
   const dash = (score / 100) * circ
   const color = scoreColor(score)
   return (
-    <svg className="score-ring" width="110" height="110" viewBox="0 0 110 110">
+    <svg className="score-ring" width="110" height="110" viewBox="0 0 110 110"
+         role="img" aria-label={`Fit score ${score} out of 100`}>
       <circle cx="55" cy="55" r={r} fill="none" stroke="#242938" strokeWidth="9" />
       <circle
         cx="55" cy="55" r={r} fill="none"
@@ -291,7 +298,7 @@ function CategoryBars({ breakdown, scenario }) {
   const weights = SCENARIO_WEIGHTS[scenario] ?? {}
   const items = Object.entries(breakdown)
     .filter(([cat]) => cat in weights && cat in CATEGORY_LABELS)
-    .map(([cat, raw]) => ({ cat, score: Math.round(raw * 100), weight: weights[cat] }))
+    .map(([cat, raw]) => ({ cat, score: Math.min(100, Math.round(raw * 100)), weight: weights[cat] }))
     .sort((a, b) => b.weight - a.weight)
 
   return (
@@ -349,7 +356,7 @@ function ComparePanel({ cmp, onClose }) {
     <div className="compare-panel">
       <div className="compare-header">
         <span className="compare-title">Comparing · {scenLabel}</span>
-        <button className="compare-close" onClick={onClose}>✕</button>
+        <button className="compare-close" onClick={onClose} aria-label="Close comparison">✕</button>
       </div>
 
       <div className="compare-scores">
@@ -360,7 +367,7 @@ function ComparePanel({ cmp, onClose }) {
           <div key={side} className={`compare-side compare-side-${side}`}>
             <span className="compare-sector-name">{sec.name_fr || sec.id}</span>
             <span className="compare-score" style={{ color: scoreColor(score) }}>{score}</span>
-            <span className="compare-pct">top {Math.max(1, 100 - pct)}%</span>
+            {Number.isFinite(pct) && <span className="compare-pct">top {Math.max(1, 100 - pct)}%</span>}
           </div>
         ))}
       </div>
@@ -450,7 +457,7 @@ function MapLayerToggles({ sectorId, mapInst, mapReady, active, onActiveChange }
           properties: { name: p.name },
         }))
         cache.current[key] = features
-      } catch (_) { return }
+      } catch (e) { console.error(`POI load failed (${cat})`, e); return }
     }
     const srcId = `poi-src-${cat}`
     const layerId = `poi-${cat}`
@@ -520,6 +527,9 @@ function GroqPanel({ sectorId, scenario }) {
   const [groqError, setGroqError] = useState(null)
   const abortRef = useRef(null)
 
+  // Abort any in-flight stream when the panel unmounts (e.g. sector change).
+  useEffect(() => () => abortRef.current?.abort(), [])
+
   const ask = async () => {
     const q = question.trim()
     setAnswer("")
@@ -541,6 +551,7 @@ function GroqPanel({ sectorId, scenario }) {
         throw new Error(err.detail || resp.statusText)
       }
 
+      if (!resp.body) throw new Error("No response stream")
       const reader = resp.body.getReader()
       const dec = new TextDecoder()
       let buf = ""
@@ -550,23 +561,30 @@ function GroqPanel({ sectorId, scenario }) {
         const { value, done: d } = await reader.read()
         done = d
         buf += dec.decode(value ?? new Uint8Array(), { stream: !d })
-        const lines = buf.split("\n")
-        buf = lines.pop()
-        for (const line of lines) {
-          if (!line.startsWith("data: ")) continue
-          const payload = line.slice(6)
-          if (payload === "[DONE]") { done = true; break }
-          try {
-            const obj = JSON.parse(payload)
-            if (obj.error) throw new Error(obj.error)
-            if (obj.token) setAnswer(prev => prev + obj.token)
-          } catch (_) {}
+        // SSE frames are separated by a blank line ("\n\n"); split on the frame
+        // boundary so tokens that themselves contain newlines are never split.
+        const frames = buf.split("\n\n")
+        buf = frames.pop()
+        for (const frame of frames) {
+          for (const line of frame.split("\n")) {
+            if (!line.startsWith("data: ")) continue
+            const payload = line.slice(6)
+            if (payload === "[DONE]") { done = true; break }
+            try {
+              const obj = JSON.parse(payload)
+              if (obj.error) throw new Error(obj.error)
+              if (obj.token) setAnswer(prev => prev + obj.token)
+            } catch (_) {}
+          }
+          if (done) break
         }
       }
     } catch (e) {
       if (e.name !== "AbortError") setGroqError(e.message)
     } finally {
-      setStreaming(false)
+      // Only the most recent request may clear the flag — a stale aborted
+      // request must not flip state for the request that replaced it.
+      if (abortRef.current === ctrl) setStreaming(false)
     }
   }
 
@@ -588,7 +606,7 @@ function GroqPanel({ sectorId, scenario }) {
       </div>
       {groqError && <p className="error-msg">{groqError}</p>}
       {(answer || streaming) && (
-        <div className={`grok-answer${streaming ? " streaming" : ""}`}>
+        <div className={`grok-answer${streaming ? " streaming" : ""}`} aria-live="polite">
           {answer}
           {streaming && <span className="grok-cursor" />}
         </div>
@@ -656,6 +674,8 @@ export default function App() {
   const scenarioRef           = useRef(urlParams.current.scenario ?? "family")
   const fetchBySectorIdRef    = useRef(null)
   const fetchCompareByRef     = useRef(null)
+  const compareResultRef      = useRef(null)
+  const latestGeoKey          = useRef("")
 
   // ── Tour ────────────────────────────────────────────────────────────────
   const advanceTour = useCallback(() => {
@@ -701,8 +721,17 @@ export default function App() {
     setFilterCatsByScenario({ family: new Set(), senior: new Set(), remote: new Set() })
     setFilterMatching(null)
     setSectorsGeo(null)
+    setMapActiveLayers(new Set())
     const m = mapInst.current
-    if (m) m.flyTo({ center: cityConfig.center, zoom: cityConfig.zoom, duration: 1200 })
+    if (m) {
+      // Tear down the previous city's POI layers — MapLayerToggles is unmounted
+      // (no result yet) so its sector-change cleanup never runs for the new city.
+      MAP_LAYERS.forEach(({ cat }) => {
+        if (m.getLayer(`poi-${cat}`)) m.removeLayer(`poi-${cat}`)
+        if (m.getSource(`poi-src-${cat}`)) m.removeSource(`poi-src-${cat}`)
+      })
+      m.flyTo({ center: cityConfig.center, zoom: cityConfig.zoom, duration: 1200 })
+    }
   }, [])
 
   // ── Init map ────────────────────────────────────────────────────────────
@@ -725,12 +754,14 @@ export default function App() {
   // ── Load sectors GeoJSON ────────────────────────────────────────────────
   const loadSectorsGeo = useCallback(async (scen, cty) => {
     const key = `${cty}:${scen}`
+    latestGeoKey.current = key
     if (geoCache.current[key]) { setSectorsGeo(geoCache.current[key]); return }
     try {
       const data = await fetch(`${API}/api/sectors.geojson?scenario=${scen}&city=${cty}`).then(r => r.json())
       geoCache.current[key] = data
-      setSectorsGeo(data)
-    } catch (_) {}
+      // Ignore a stale response if the user has since switched city/scenario.
+      if (latestGeoKey.current === key) setSectorsGeo(data)
+    } catch (e) { console.error("sectors.geojson load failed", e) }
   }, [])
 
   useEffect(() => { loadSectorsGeo(scenario, city) }, [scenario, city, loadSectorsGeo])
@@ -983,8 +1014,18 @@ export default function App() {
   // ── Re-fetch on scenario change ─────────────────────────────────────────
   useEffect(() => {
     if (isFirstRender.current) { isFirstRender.current = false; return }
-    setCompareResult(null)
-    if (result?.sector?.id) fetchBySectorId(result.sector.id)
+    const sectorAId = resultRef.current?.sector?.id
+    if (!sectorAId) return
+    const prevCompare = compareResultRef.current
+    ;(async () => {
+      await fetchBySectorId(sectorAId)            // refresh primary card (clears compare)
+      const aId = prevCompare?.a?.sector?.id
+      const bId = prevCompare?.b?.sector?.id
+      if (aId && bId) {
+        try { await _doCompare(aId, bId, scenarioRef.current) }  // re-run compare under new scenario
+        catch (e) { setError(e.message) }
+      }
+    })()
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [scenario])
 
@@ -994,6 +1035,10 @@ export default function App() {
     if (!addr) return
     setLoading(true)
     setError(null)
+    // A brand-new primary search must drop any stale comparison.
+    setCompareResult(null)
+    setCompareMode(false)
+    setCompareAddr("")
     try {
       const r = await fetch(
         `${API}/api/score?address=${encodeURIComponent(addr)}&scenario=${scenario}&city=${city}`
@@ -1039,7 +1084,7 @@ export default function App() {
         setError("Same sector — enter a different address to compare.")
         return
       }
-      await _doCompare(result.sector.id, sectorBId)
+      await _doCompare(result.sector.id, sectorBId, scenario)
     } catch (e) {
       setError(e.message)
     } finally {
@@ -1047,9 +1092,9 @@ export default function App() {
     }
   }
 
-  const _doCompare = async (sectorAId, sectorBId) => {
+  const _doCompare = async (sectorAId, sectorBId, scen = scenarioRef.current) => {
     const cmp = await fetch(
-      `${API}/api/compare?a=${sectorAId}&b=${sectorBId}&scenario=${scenarioRef.current}`
+      `${API}/api/compare?a=${sectorAId}&b=${sectorBId}&scenario=${scen}`
     )
     if (!cmp.ok) throw new Error(await cmp.json().then(d => d.detail).catch(() => cmp.statusText))
     setCompareResult(await cmp.json())
@@ -1073,6 +1118,7 @@ export default function App() {
   // Keep refs in sync on every render
   compareModeRef.current     = compareMode
   resultRef.current          = result
+  compareResultRef.current   = compareResult
   scenarioRef.current        = scenario
   fetchBySectorIdRef.current = fetchBySectorId
   fetchCompareByRef.current  = fetchCompareById
@@ -1080,7 +1126,9 @@ export default function App() {
   // ── Render ──────────────────────────────────────────────────────────────
   const communeName   = result ? COMMUNES[result.sector.municipality] : null
   const scenarioLabel = SCENARIOS.find(s => s.id === scenario)?.label
-  const topPct        = result ? Math.max(1, Math.round(100 - result.percentile)) : null
+  const cityLabel     = CITIES.find(c => c.id === city)?.label ?? "the city"
+  const topPct        = result && Number.isFinite(result.percentile)
+    ? Math.max(1, Math.round(100 - result.percentile)) : null
 
   return (
     <div className="app">
@@ -1090,7 +1138,7 @@ export default function App() {
           <span className="logo-dot" />
           <span className="logo-text">Neighbourhood Fit</span>
           <CityPicker city={city} onChange={handleCityChange} />
-          <button className="tour-trigger" onClick={startTour} title="Feature tour">?</button>
+          <button className="tour-trigger" onClick={startTour} title="Feature tour" aria-label="Feature tour">?</button>
         </div>
 
         {/* Scenario tabs */}
@@ -1113,7 +1161,7 @@ export default function App() {
             placeholder="Address or neighbourhood…"
             value={addressInput}
             onChange={e => setAddressInput(e.target.value)}
-            onKeyDown={e => e.key === "Enter" && fetchByAddress()}
+            onKeyDown={e => e.key === "Enter" && !loading && fetchByAddress()}
           />
           <button className="search-btn" onClick={fetchByAddress} disabled={loading}>
             {loading ? "…" : "Go"}
@@ -1145,7 +1193,7 @@ export default function App() {
               <ScoreRing score={result.score} />
               <div className="score-meta">
                 <p className="score-scenario">{scenarioLabel} Fit Score</p>
-                <p className="score-pct">Top {topPct}% in Brussels</p>
+                {topPct != null && <p className="score-pct">Top {topPct}% in {cityLabel}</p>}
                 {result.sector.population > 0 && (
                   <p className="score-pop">
                     ~{result.sector.population.toLocaleString()} residents
@@ -1156,7 +1204,7 @@ export default function App() {
 
             <NarrativeBlock narrative={result.narrative} />
             <WhyPanel pros={result.pros} cons={result.cons} />
-            <GroqPanel sectorId={result.sector.id} scenario={scenario} />
+            <GroqPanel key={result.sector.id} sectorId={result.sector.id} scenario={scenario} />
 
             {!compareMode && !compareResult && (
               <button className="compare-trigger" onClick={() => setCompareMode(true)}>
@@ -1174,18 +1222,20 @@ export default function App() {
                     placeholder="Second address…"
                     value={compareAddr}
                     onChange={e => setCompareAddr(e.target.value)}
-                    onKeyDown={e => e.key === "Enter" && fetchCompare()}
+                    onKeyDown={e => e.key === "Enter" && !compareLoading && fetchCompare()}
                   />
                   <button
                     className="search-btn"
                     onClick={fetchCompare}
                     disabled={compareLoading || !compareAddr.trim()}
+                    aria-label="Run comparison"
                   >
                     {compareLoading ? "…" : "↔"}
                   </button>
                   <button
                     className="compare-cancel"
                     onClick={() => { setCompareMode(false); setCompareAddr("") }}
+                    aria-label="Cancel compare"
                   >
                     ✕
                   </button>

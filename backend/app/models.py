@@ -22,7 +22,7 @@ class SectorScore(SQLModel, table=True):
     __tablename__ = "sector_score"
     id: Optional[int] = Field(default=None, primary_key=True)
     sector_id: str = Field(foreign_key="sector.id", index=True)
-    scenario: str                            # 'family' | 'senior' | 'remote_work'
+    scenario: str                            # 'family' | 'senior' | 'remote'
     score: int                               # 0..100 absolute
     percentile: int                          # 0..100 Hazen rank across Brussels sectors
     breakdown: Optional[Any] = Field(default=None, sa_column=Column(JSON))  # per-category sub-scores

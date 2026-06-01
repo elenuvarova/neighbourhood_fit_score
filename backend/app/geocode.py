@@ -1,6 +1,7 @@
 """Nominatim geocoding with SQLite cache."""
 from __future__ import annotations
 
+import os
 import time
 
 import requests
@@ -9,7 +10,12 @@ from sqlmodel import Session, select
 from app.models import GeocodeCache
 
 _NOMINATIM = "https://nominatim.openstreetmap.org/search"
-_USER_AGENT = "neighbourhood-fit-score/1.0 (open-source, brussels-pilot)"
+# Nominatim asks every client to send an identifying User-Agent; honour the
+# deploy-configured value (render.yaml sets NOMINATIM_USER_AGENT) when present.
+_USER_AGENT = os.getenv(
+    "NOMINATIM_USER_AGENT",
+    "neighbourhood-fit-score/1.0 (open-source, brussels-pilot)",
+)
 
 # Brussels WGS84 bounding box — used as a hint (not hard restriction)
 _VIEWBOX = "4.23,50.93,4.50,50.77"  # lon_min,lat_max,lon_max,lat_min
