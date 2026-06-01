@@ -407,7 +407,7 @@ function ImprovementsList({ improvements, onHighlight }) {
   if (!improvements?.length) return null
   return (
     <div className="improvements">
-      <p className="section-title">How to improve</p>
+      <p className="section-title">Score boosters</p>
       {improvements.map(imp => (
         <button key={imp.rank} className="imp-item" onClick={() => onHighlight?.(imp)}>
           <span className="imp-title">{imp.title}</span>
