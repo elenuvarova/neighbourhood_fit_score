@@ -1,0 +1,16 @@
+# Large raw data — never commit
+*.pbf
+*.sqlite
+*.graphml
+*.zip
+raw/
+osmnx_cache/
+
+# Processed outputs are large but regenerable — keep out of git
+# Comment out specific files if you want to commit processed seeds
+processed/*.geojson
+processed/*.graphml
+processed/*.csv
+
+# Keep the directory structure
+!.gitignore
