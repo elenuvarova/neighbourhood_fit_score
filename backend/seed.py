@@ -209,9 +209,11 @@ def main() -> None:
     print("─── Seeding database ───")
     with Session(engine) as session:
         n_s = _seed_sectors(session)
+        session.flush()  # sectors must be visible before FK-referencing tables
         print(f"  Sectors:       {n_s}")
 
         n_sc = _seed_scores(session)
+        session.flush()
         print(f"  Scores:        {n_sc}")
 
         n_i = _seed_improvements(session)
