@@ -13,9 +13,16 @@ if _url.startswith("postgres://"):
 
 if _url.startswith("postgresql://"):
     db_kind = "postgres"
+    # SSL is conditional. Managed Postgres that needs TLS (e.g. Supabase, Neon)
+    # carries `sslmode=require` in the URL; honour it then. The Coolify-internal
+    # Postgres speaks plaintext on the Docker network and FORCING sslmode=require
+    # would crash-loop the app, so only enable SSL when the URL already asks for it.
+    connect_args: dict = {}
+    if "sslmode=require" in _url:
+        connect_args["sslmode"] = "require"
     engine = create_engine(
         _url,
-        connect_args={"sslmode": "require"},
+        connect_args=connect_args,
         pool_pre_ping=True,
     )
 else:
