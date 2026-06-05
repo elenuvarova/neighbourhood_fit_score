@@ -144,9 +144,13 @@ app.add_middleware(GZipMiddleware, minimum_size=1024)
 # ---------------------------------------------------------------------------
 
 def _client_ip(request: Request) -> str:
+    # The app runs behind exactly ONE trusted proxy (Coolify/Traefik), which
+    # appends the real peer IP to the RIGHT of X-Forwarded-For. The leftmost
+    # entry is client-supplied and trivially spoofable (rotate it to defeat a
+    # per-IP limit), so we take the LAST entry — the one our proxy added.
     fwd = request.headers.get("x-forwarded-for")
     if fwd:
-        return fwd.split(",")[0].strip()
+        return fwd.split(",")[-1].strip()
     return get_remote_address(request)
 
 
