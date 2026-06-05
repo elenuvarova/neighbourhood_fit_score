@@ -24,6 +24,25 @@
   /* Standard UI transition vs. slower data-viz transition. */
   --ease-ui:   0.16s ease;
   --ease-data: 0.5s ease;
+
+  /* ── Type scale ── one coherent ramp instead of ~20 ad-hoc sizes.
+     Body sits at 14px; labels/meta step down, headings step up. */
+  --fs-2xs:  0.6875rem;  /* 11px — badges, legend, tiny captions   */
+  --fs-xs:   0.75rem;    /* 12px — uppercase labels, meta, chips    */
+  --fs-sm:   0.8125rem;  /* 13px — secondary body, list items       */
+  --fs-base: 0.875rem;   /* 14px — base body, inputs, buttons       */
+  --fs-md:   1rem;       /* 16px — sector name, card titles         */
+  --fs-lg:   1.25rem;    /* 20px — emphasis numbers                 */
+
+  /* ── Spacing scale (4px base) ── consistent rhythm across sections. */
+  --sp-1: 4px;
+  --sp-2: 8px;
+  --sp-3: 12px;
+  --sp-4: 16px;
+  --sp-5: 20px;
+  --sp-6: 24px;
+  /* Standard vertical / horizontal padding for a top-level panel section. */
+  --section-pad: var(--sp-4) var(--sp-5);
 }
 
 body {
@@ -76,7 +95,7 @@ summary:focus-visible,
   color: #fff;
   padding: 8px 14px;
   border-radius: var(--r);
-  font-size: 0.85rem;
+  font-size: var(--fs-base);
   text-decoration: none;
   transition: top 0.15s;
 }
@@ -159,7 +178,7 @@ button:active,
   display: flex;
   align-items: center;
   gap: 8px;
-  padding: 18px 20px 16px;
+  padding: var(--section-pad);
   border-bottom: 1px solid var(--border);
   flex-shrink: 0;
 }
@@ -173,13 +192,13 @@ button:active,
 
 .logo-text {
   font-weight: 700;
-  font-size: 0.92rem;
+  font-size: var(--fs-md);
   letter-spacing: -0.01em;
 }
 
 .logo-city {
   margin-left: auto;
-  font-size: 0.75rem;
+  font-size: var(--fs-xs);
   color: var(--text-muted);
   background: var(--surface-2);
   padding: 2px 8px;
@@ -198,7 +217,7 @@ button:active,
   align-items: center;
   gap: 4px;
   min-height: 24px;
-  font-size: 0.75rem;
+  font-size: var(--fs-xs);
   color: var(--text-muted);
   background: var(--surface-2);
   border: 1px solid var(--border);
@@ -238,7 +257,7 @@ button:active,
   background: none;
   border: none;
   color: var(--text-dim);
-  font-size: 0.82rem;
+  font-size: var(--fs-sm);
   text-align: left;
   cursor: pointer;
   transition: background 0.12s;
@@ -250,7 +269,7 @@ button:active,
 .city-option.soon { cursor: default; color: var(--text-muted); }
 
 .soon-badge {
-  font-size: 0.62rem;
+  font-size: var(--fs-2xs);
   color: var(--text-muted);
   background: var(--surface-2);
   border: 1px solid var(--border);
@@ -262,7 +281,7 @@ button:active,
 /* ── Preference filter ───────────────────────────────────── */
 
 .filter-section {
-  padding: 10px 20px 12px;
+  padding: var(--section-pad);
   border-bottom: 1px solid var(--border);
   display: flex;
   flex-direction: column;
@@ -283,7 +302,7 @@ button:active,
 }
 
 .filter-count {
-  font-size: 0.72rem;
+  font-size: var(--fs-xs);
   color: var(--green);
   font-weight: 600;
 }
@@ -292,7 +311,7 @@ button:active,
   display: inline-flex;
   align-items: center;
   min-height: 24px;
-  font-size: 0.72rem;
+  font-size: var(--fs-xs);
   color: var(--text-muted);
   background: none;
   border: none;
@@ -307,11 +326,11 @@ button:active,
 .filter-chips {
   display: flex;
   flex-wrap: wrap;
-  gap: 4px;
+  gap: 6px;
 }
 
 .filter-loading {
-  font-size: 0.72rem;
+  font-size: var(--fs-xs);
   color: var(--text-muted);
   font-style: italic;
   padding: 4px 0;
@@ -326,7 +345,7 @@ button:active,
   border: 1px solid var(--border);
   border-radius: 12px;
   color: var(--text-muted);
-  font-size: 0.72rem;
+  font-size: var(--fs-xs);
   cursor: pointer;
   transition: all 0.13s;
   white-space: nowrap;
@@ -350,7 +369,7 @@ button:active,
 }
 
 .threshold-label {
-  font-size: 0.68rem;
+  font-size: var(--fs-2xs);
   color: var(--text-muted);
   margin-right: 2px;
   white-space: nowrap;
@@ -359,7 +378,7 @@ button:active,
 .threshold-btns {
   display: flex;
   align-items: center;
-  gap: 4px;
+  gap: 6px;
   flex-wrap: wrap;
 }
 
@@ -372,7 +391,7 @@ button:active,
   border: 1px solid var(--border);
   border-radius: 10px;
   color: var(--text-muted);
-  font-size: 0.7rem;
+  font-size: var(--fs-xs);
   cursor: pointer;
   transition: all 0.13s;
 }
@@ -395,7 +414,7 @@ button:active,
   background: var(--surface-2);
   border: 1px solid var(--border);
   color: var(--text-muted);
-  font-size: 0.7rem;
+  font-size: var(--fs-xs);
   font-weight: 700;
   cursor: pointer;
   flex-shrink: 0;
@@ -409,14 +428,14 @@ button:active,
 .tour-trigger:hover { border-color: var(--accent-text); color: var(--accent-text); }
 
 .tour-card {
-  margin: 0 20px 4px;
+  margin: var(--sp-4) var(--sp-5) var(--sp-2);
   background: linear-gradient(135deg, rgba(59,130,246,0.08) 0%, rgba(124,58,237,0.06) 100%);
   border: 1px solid rgba(59,130,246,0.25);
   border-radius: var(--r);
-  padding: 16px;
+  padding: var(--sp-4);
   display: flex;
   flex-direction: column;
-  gap: 8px;
+  gap: var(--sp-2);
 }
 
 .tour-dots {
@@ -444,14 +463,14 @@ button:active,
 }
 
 .tour-title {
-  font-size: 0.88rem;
+  font-size: var(--fs-md);
   font-weight: 700;
   color: var(--text);
   text-align: center;
 }
 
 .tour-body {
-  font-size: 0.8rem;
+  font-size: var(--fs-sm);
   color: var(--text-dim);
   line-height: 1.55;
   text-align: center;
@@ -468,7 +487,7 @@ button:active,
   display: inline-flex;
   align-items: center;
   min-height: 24px;
-  font-size: 0.72rem;
+  font-size: var(--fs-xs);
   color: var(--text-muted);
   background: none;
   border: none;
@@ -485,7 +504,7 @@ button:active,
   border: none;
   border-radius: 6px;
   color: #fff;
-  font-size: 0.78rem;
+  font-size: var(--fs-sm);
   font-weight: 600;
   cursor: pointer;
   transition: background var(--ease-ui), transform var(--ease-ui), box-shadow var(--ease-ui);
@@ -498,7 +517,7 @@ button:active,
 }
 
 .filter-empty {
-  font-size: 0.75rem;
+  font-size: var(--fs-xs);
   color: var(--text-muted);
   font-style: italic;
 }
@@ -508,7 +527,7 @@ button:active,
 .scenario-tabs {
   display: flex;
   gap: 6px;
-  padding: 12px 20px;
+  padding: var(--section-pad);
   border-bottom: 1px solid var(--border);
   flex-shrink: 0;
 }
@@ -520,8 +539,8 @@ button:active,
   border: 1px solid var(--border);
   border-radius: var(--r);
   color: var(--text-dim);
-  font-size: 0.78rem;
-  font-weight: 500;
+  font-size: var(--fs-xs);
+  font-weight: 600;
   cursor: pointer;
   transition: all 0.15s;
   white-space: nowrap;
@@ -545,7 +564,7 @@ button:active,
 .search-row {
   display: flex;
   gap: 8px;
-  padding: 12px 20px;
+  padding: var(--section-pad);
   border-bottom: 1px solid var(--border);
   flex-shrink: 0;
 }
@@ -557,7 +576,7 @@ button:active,
   border: 1px solid var(--border);
   border-radius: var(--r);
   color: var(--text);
-  font-size: 0.875rem;
+  font-size: var(--fs-base);
   outline: none;
   transition: border-color 0.15s;
 }
@@ -576,7 +595,7 @@ button:active,
   border-radius: var(--r);
   color: #fff;
   font-weight: 600;
-  font-size: 0.875rem;
+  font-size: var(--fs-base);
   cursor: pointer;
   transition: background var(--ease-ui), transform var(--ease-ui), box-shadow var(--ease-ui);
 }
@@ -594,28 +613,40 @@ button:active,
   display: flex;
   flex-direction: column;
   gap: 5px;
-  padding: 10px 20px 12px;
+  padding: var(--section-pad);
   border-bottom: 1px solid var(--border);
   flex-shrink: 0;
 }
 
 .sector-picker-label {
-  font-size: 0.72rem;
+  font-size: var(--fs-xs);
   color: var(--text-muted);
   font-weight: 600;
 }
 
 .sector-picker {
   width: 100%;
-  min-height: 36px;
-  padding: 8px 10px;
-  background: var(--surface-2);
+  min-height: 38px;
+  /* Extra right padding leaves room for the custom chevron so it never
+     crowds the edge; the native arrow is removed for cross-browser control. */
+  padding: var(--sp-2) var(--sp-5) var(--sp-2) var(--sp-3);
+  appearance: none;
+  -webkit-appearance: none;
+  -moz-appearance: none;
+  background-color: var(--surface-2);
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 12 12'%3E%3Cpath d='M2.5 4.5 L6 8 L9.5 4.5' fill='none' stroke='%2394a3b8' stroke-width='1.5' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
+  background-repeat: no-repeat;
+  background-position: right var(--sp-3) center;
+  background-size: 12px;
   border: 1px solid var(--border);
   border-radius: var(--r);
   color: var(--text);
-  font-size: 0.82rem;
+  font-size: var(--fs-sm);
   cursor: pointer;
+  transition: border-color var(--ease-ui);
 }
+
+.sector-picker:hover { border-color: var(--accent); }
 
 /* ── Messages ────────────────────────────────────────────── */
 
@@ -626,14 +657,14 @@ button:active,
   border: 1px solid rgba(248,113,113,0.25);
   border-radius: var(--r);
   color: var(--red);
-  font-size: 0.82rem;
+  font-size: var(--fs-sm);
   line-height: 1.4;
 }
 
 .hint {
   padding: 20px;
   color: var(--text-muted);
-  font-size: 0.84rem;
+  font-size: var(--fs-base);
 }
 
 /* ── Skeleton ────────────────────────────────────────────── */
@@ -655,7 +686,7 @@ button:active,
 /* ── Results ─────────────────────────────────────────────── */
 
 .results {
-  padding: 16px 20px;
+  padding: var(--section-pad);
   display: flex;
   flex-direction: column;
   gap: 14px;
@@ -680,7 +711,7 @@ button:active,
 .results > *:nth-child(n+9) { animation-delay: 300ms; }
 
 .sector-name {
-  font-size: 0.98rem;
+  font-size: var(--fs-md);
   font-weight: 700;
   letter-spacing: -0.01em;
   color: var(--text);
@@ -719,7 +750,7 @@ button:active,
 }
 
 .score-scenario {
-  font-size: 0.75rem;
+  font-size: var(--fs-xs);
   color: var(--text-muted);
   font-weight: 500;
   text-transform: uppercase;
@@ -733,14 +764,14 @@ button:active,
 }
 
 .score-pop {
-  font-size: 0.75rem;
+  font-size: var(--fs-xs);
   color: var(--text-muted);
 }
 
 /* ── Narrative ───────────────────────────────────────────── */
 
 .narrative-text {
-  font-size: 0.83rem;
+  font-size: var(--fs-sm);
   color: var(--text-dim);
   line-height: 1.55;
   padding: 10px 14px;
@@ -772,7 +803,7 @@ button:active,
 }
 
 .why-title {
-  font-size: 0.7rem;
+  font-size: var(--fs-xs);
   font-weight: 700;
   text-transform: uppercase;
   letter-spacing: 0.06em;
@@ -790,7 +821,7 @@ button:active,
 }
 
 .why-item {
-  font-size: 0.82rem;
+  font-size: var(--fs-sm);
   color: var(--text-dim);
   padding-left: 16px;
   position: relative;
@@ -840,7 +871,7 @@ button:active,
 }
 
 .imp-title {
-  font-size: 0.82rem;
+  font-size: var(--fs-sm);
   color: var(--text-dim);
   flex: 1;
 }
@@ -849,7 +880,7 @@ button:active,
   display: flex;
   align-items: center;
   gap: 6px;
-  font-size: 0.78rem;
+  font-size: var(--fs-sm);
   color: var(--text-muted);
   white-space: nowrap;
 }
@@ -857,7 +888,7 @@ button:active,
 .imp-gain {
   color: var(--green);
   font-weight: 700;
-  font-size: 0.82rem;
+  font-size: var(--fs-sm);
 }
 
 .imp-map-hint {
@@ -865,7 +896,7 @@ button:active,
   align-items: center;
   gap: 6px;
   margin-top: 6px;
-  font-size: 0.7rem;
+  font-size: var(--fs-xs);
   color: var(--text-muted);
 }
 
@@ -882,7 +913,7 @@ button:active,
 /* ── Category bars ───────────────────────────────────────── */
 
 .section-title {
-  font-size: 0.7rem;
+  font-size: var(--fs-xs);
   font-weight: 700;
   text-transform: uppercase;
   letter-spacing: 0.06em;
@@ -903,7 +934,7 @@ button:active,
 }
 
 .bar-label {
-  font-size: 0.76rem;
+  font-size: var(--fs-xs);
   color: var(--text-dim);
   white-space: nowrap;
   overflow: hidden;
@@ -925,7 +956,7 @@ button:active,
 }
 
 .bar-score {
-  font-size: 0.72rem;
+  font-size: var(--fs-xs);
   color: var(--text-muted);
   text-align: right;
 }
@@ -935,7 +966,7 @@ button:active,
 .layer-toggles {
   display: flex;
   flex-wrap: wrap;
-  gap: 5px;
+  gap: 6px;
 }
 
 .layer-btn {
@@ -948,7 +979,7 @@ button:active,
   border: 1px solid var(--border);
   border-radius: 20px;
   color: var(--text-dim);
-  font-size: 0.75rem;
+  font-size: var(--fs-xs);
   cursor: pointer;
   transition: all 0.15s;
 }
@@ -982,7 +1013,7 @@ button:active,
   gap: 8px;
 }
 
-.grok-input { font-size: 0.82rem; }
+.grok-input { font-size: var(--fs-sm); }
 
 .grok-btn {
   flex-shrink: 0;
@@ -1002,7 +1033,7 @@ button:active,
   background: rgba(124, 58, 237, 0.06);
   border: 1px solid rgba(124, 58, 237, 0.2);
   border-radius: var(--r);
-  font-size: 0.82rem;
+  font-size: var(--fs-sm);
   color: var(--text-dim);
   line-height: 1.6;
   white-space: pre-wrap;
@@ -1035,7 +1066,7 @@ button:active,
   border: 1px dashed var(--border);
   border-radius: var(--r);
   color: var(--text-muted);
-  font-size: 0.78rem;
+  font-size: var(--fs-sm);
   cursor: pointer;
   transition: all 0.15s;
   text-align: center;
@@ -1057,7 +1088,7 @@ button:active,
   border: 1px solid var(--border);
   border-radius: var(--r);
   color: var(--text-muted);
-  font-size: 0.8rem;
+  font-size: var(--fs-sm);
   cursor: pointer;
   flex-shrink: 0;
   transition: all 0.15s;
@@ -1082,7 +1113,7 @@ button:active,
 }
 
 .compare-title {
-  font-size: 0.72rem;
+  font-size: var(--fs-xs);
   font-weight: 700;
   text-transform: uppercase;
   letter-spacing: 0.05em;
@@ -1098,7 +1129,7 @@ button:active,
   background: none;
   border: none;
   color: var(--text-muted);
-  font-size: 0.85rem;
+  font-size: var(--fs-base);
   cursor: pointer;
   padding: 4px 6px;
   transition: color 0.15s;
@@ -1125,7 +1156,7 @@ button:active,
 .compare-side-a { border-right: 1px solid var(--border); }
 
 .compare-sector-name {
-  font-size: 0.72rem;
+  font-size: var(--fs-xs);
   color: var(--text-dim);
   font-weight: 600;
   text-align: center;
@@ -1139,13 +1170,13 @@ button:active,
 }
 
 .compare-pct {
-  font-size: 0.7rem;
+  font-size: var(--fs-xs);
   color: var(--text-muted);
 }
 
 .compare-verdict {
   padding: 8px 13px;
-  font-size: 0.78rem;
+  font-size: var(--fs-sm);
   color: var(--text-dim);
   border-bottom: 1px solid var(--border);
   line-height: 1.4;
@@ -1166,7 +1197,7 @@ button:active,
 }
 
 .delta-label {
-  font-size: 0.72rem;
+  font-size: var(--fs-xs);
   color: var(--text-dim);
   white-space: nowrap;
   overflow: hidden;
@@ -1193,7 +1224,7 @@ button:active,
 .delta-bar-b.winner { opacity: 1; }
 
 .delta-scores {
-  font-size: 0.68rem;
+  font-size: var(--fs-2xs);
   color: var(--text-muted);
   text-align: right;
   white-space: nowrap;
@@ -1205,14 +1236,14 @@ button:active,
   border: 1px solid var(--border);
   border-radius: var(--r);
   padding: 10px 13px;
-  font-size: 0.76rem;
+  font-size: var(--fs-xs);
   color: var(--text-muted);
 }
 
 .disclosure summary {
   cursor: pointer;
   color: var(--text-dim);
-  font-size: 0.77rem;
+  font-size: var(--fs-xs);
   font-weight: 500;
   user-select: none;
   list-style: none;
@@ -1226,7 +1257,7 @@ button:active,
   grid-template-columns: auto 1fr;
   gap: 4px 12px;
   margin-top: 8px;
-  font-size: 0.74rem;
+  font-size: var(--fs-xs);
 }
 
 .method-grid dt {
@@ -1239,7 +1270,7 @@ button:active,
 
 .disclosure summary::before {
   content: "▸";
-  font-size: 0.65rem;
+  font-size: var(--fs-2xs);
   transition: transform 0.2s;
 }
 
@@ -1269,7 +1300,7 @@ button:active,
 }
 
 .legend-label {
-  font-size: 0.62rem;
+  font-size: var(--fs-2xs);
   font-weight: 700;
   text-transform: uppercase;
   letter-spacing: 0.06em;
@@ -1291,7 +1322,7 @@ button:active,
 }
 
 .legend-range {
-  font-size: 0.68rem;
+  font-size: var(--fs-2xs);
   color: var(--text-dim);
 }
 
@@ -1317,7 +1348,7 @@ button:active,
 .maplibregl-popup-tip { display: none !important; }
 
 .map-popup {
-  font-size: 0.78rem;
+  font-size: var(--fs-sm);
   color: #e2e8f0;
   white-space: nowrap;
   font-family: system-ui, -apple-system, sans-serif;
@@ -1331,7 +1362,7 @@ button:active,
 
 .imp-popup {
   white-space: nowrap;
-  font-size: 0.82rem;
+  font-size: var(--fs-sm);
 }
 
 .imp-popup-wrap .maplibregl-popup-content {
@@ -1350,7 +1381,7 @@ button:active,
 }
 
 .compare-hint {
-  font-size: 0.75rem;
+  font-size: var(--fs-xs);
   color: var(--accent-text);
   padding: 5px 10px;
   background: rgba(59,130,246,0.08);
