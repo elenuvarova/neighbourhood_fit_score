@@ -16,7 +16,13 @@ build/
 # Python dev artifacts
 backend/.venv/
 **/__pycache__/
-*.pyc
+**/*.pyc
+
+# Local databases — never bake the stale dev SQLite into the prod image.
+# seed.py recreates the SQLite fallback (or Postgres is used) at runtime.
+**/*.sqlite
+**/*.sqlite-journal
+**/*.db
 
 # Pipeline raw data — large, not needed in runtime image
 backend/pipeline/data/raw/

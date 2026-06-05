@@ -11,24 +11,37 @@ from app.models import GeocodeCache
 
 _NOMINATIM = "https://nominatim.openstreetmap.org/search"
 # Nominatim asks every client to send an identifying User-Agent; honour the
-# deploy-configured value (render.yaml sets NOMINATIM_USER_AGENT) when present.
+# deploy-configured value (the NOMINATIM_USER_AGENT env var) when present.
 _USER_AGENT = os.getenv(
     "NOMINATIM_USER_AGENT",
     "neighbourhood-fit-score/1.0 (open-source, brussels-pilot)",
 )
 
-# Brussels WGS84 bounding box — used as a hint (not hard restriction)
-_VIEWBOX = "4.23,50.93,4.50,50.77"  # lon_min,lat_max,lon_max,lat_min
+# Per-city WGS84 bounding boxes — used as a hint (not hard restriction).
+# Format: lon_min,lat_max,lon_max,lat_min. Default to Brussels for unknown cities.
+_VIEWBOXES: dict[str, str] = {
+    "brussels": "4.23,50.93,4.50,50.77",
+    "antwerp":  "4.28,51.30,4.53,51.13",
+}
+_DEFAULT_CITY = "brussels"
 
 _last_call: float = 0.0
 
 
-def geocode(address: str, db: Session) -> tuple[float, float] | tuple[None, None]:
+def geocode(
+    address: str, db: Session, city: str = "brussels"
+) -> tuple[float, float] | tuple[None, None]:
     """
     Geocode an address to (lat, lng).  Checks cache first; calls Nominatim on miss.
     Returns (None, None) if address is not found.
+
+    The cache key is prefixed with `city` so Brussels and Antwerp results for the
+    same street name do not collide. The Nominatim viewbox is chosen per city.
     """
-    cached = db.exec(select(GeocodeCache).where(GeocodeCache.query == address)).first()
+    viewbox = _VIEWBOXES.get(city, _VIEWBOXES[_DEFAULT_CITY])
+    cache_key = f"{city}:{address}"
+
+    cached = db.exec(select(GeocodeCache).where(GeocodeCache.query == cache_key)).first()
     if cached:
         return cached.lat, cached.lng
 
@@ -45,7 +58,7 @@ def geocode(address: str, db: Session) -> tuple[float, float] | tuple[None, None
                 "q": address,
                 "format": "json",
                 "limit": 1,
-                "viewbox": _VIEWBOX,
+                "viewbox": viewbox,
                 "addressdetails": 0,
             },
             headers={"User-Agent": _USER_AGENT},
@@ -62,7 +75,7 @@ def geocode(address: str, db: Session) -> tuple[float, float] | tuple[None, None
     lat = float(results[0]["lat"])
     lng = float(results[0]["lon"])
 
-    db.add(GeocodeCache(query=address, lat=lat, lng=lng))
+    db.add(GeocodeCache(query=cache_key, lat=lat, lng=lng))
     db.commit()
 
     return lat, lng

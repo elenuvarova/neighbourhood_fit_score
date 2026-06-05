@@ -30,4 +30,4 @@ EXPOSE 3001
 HEALTHCHECK --interval=30s --timeout=5s --start-period=40s --retries=3 \
     CMD python3 -c "import os,urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:'+os.environ.get('PORT','3001')+'/api/health', timeout=4).status==200 else 1)" || exit 1
 
-CMD ["sh", "-c", "python seed.py && uvicorn app.main:app --host 0.0.0.0 --port $PORT"]
+CMD ["sh", "-c", "python seed.py && exec uvicorn app.main:app --host 0.0.0.0 --port $PORT"]

@@ -1,22 +1,49 @@
+import hashlib
 import json
+import logging
 import os
 from contextlib import asynccontextmanager
+from enum import Enum
 from typing import Any
 
-from fastapi import Depends, FastAPI, HTTPException, Query
+from fastapi import Depends, FastAPI, HTTPException, Query, Request, Response
+from fastapi.middleware.gzip import GZipMiddleware
 from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from openai import AsyncOpenAI
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from shapely.geometry import Point, shape
 from shapely.strtree import STRtree
+from slowapi import Limiter
+from slowapi.errors import RateLimitExceeded
+from slowapi.util import get_remote_address
 from sqlmodel import Session, SQLModel, select, text
+
+# Canonical scenario weights live in the pipeline config (single source of truth).
+# Safe to import at runtime: pipeline/config.py imports only pathlib at module top,
+# and uvicorn runs from backend/ where `pipeline` resolves as a namespace package
+# (seed.py imports it the same way).
+from pipeline.config import SCENARIO_WEIGHTS
 
 from app.database import engine, db_kind
 from app.geocode import geocode
 from app.models import (  # noqa: F401 — register tables
     GeocodeCache, Improvement, Poi, Sector, SectorScore,
 )
+
+logger = logging.getLogger("nfs")
+
+
+# ---------------------------------------------------------------------------
+# Scenario — closed set of valid scoring scenarios.
+# Used as the param/body type so FastAPI returns 422 on an unknown value
+# instead of a misleading 404 from a downstream "score not found" lookup.
+# ---------------------------------------------------------------------------
+
+class Scenario(str, Enum):
+    family = "family"
+    senior = "senior"
+    remote = "remote"
 
 # ---------------------------------------------------------------------------
 # Groq client (lazy — only used for /api/explain)
@@ -76,6 +103,10 @@ def _build_spatial_index(session: Session) -> None:
 
 
 def _find_sector_id(lat: float, lng: float) -> str | None:
+    # NOTE: the STRtree currently indexes sectors from ALL cities. With only
+    # Brussels loaded this is correct; once a second city (Antwerp) has data,
+    # this lookup should be scoped to the requested city to avoid cross-city
+    # point-in-polygon false matches. Not implemented yet — single city today.
     if _strtree is None:
         return None
     pt = Point(lng, lat)
@@ -102,6 +133,70 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(lifespan=lifespan)
 
+# Compress JSON responses (the GeoJSON choropleth in particular).
+app.add_middleware(GZipMiddleware, minimum_size=1024)
+
+
+# ---------------------------------------------------------------------------
+# Rate limiting
+# The app runs behind Coolify/Traefik, so the real client IP is in the first
+# entry of X-Forwarded-For; fall back to the socket peer for local/direct use.
+# ---------------------------------------------------------------------------
+
+def _client_ip(request: Request) -> str:
+    fwd = request.headers.get("x-forwarded-for")
+    if fwd:
+        return fwd.split(",")[0].strip()
+    return get_remote_address(request)
+
+
+limiter = Limiter(key_func=_client_ip)
+app.state.limiter = limiter
+
+
+@app.exception_handler(RateLimitExceeded)
+async def _rate_limit_handler(request: Request, exc: RateLimitExceeded):
+    return JSONResponse(
+        status_code=429,
+        content={"detail": "Rate limit exceeded. Please slow down and try again."},
+    )
+
+
+# ---------------------------------------------------------------------------
+# Security headers — applied to every response.
+# CSP is tuned for this app: the SPA is served same-origin by StaticFiles, the
+# only third party is the MapLibre basemap from OpenFreeMap (vector tiles, glyphs
+# and sprites from *.openfreemap.org), and the app calls its own /api (same
+# origin). MapLibre uses web workers (blob:) and injects inline styles, hence
+# worker-src/child-src blob: and style-src 'unsafe-inline'.
+# img-src/connect-src also allow *.openstreetmap.org in case the basemap style
+# references OSM raster/attribution endpoints.
+# ---------------------------------------------------------------------------
+
+_CSP = (
+    "default-src 'self'; "
+    "script-src 'self'; "
+    "worker-src 'self' blob:; "
+    "child-src 'self' blob:; "
+    "style-src 'self' 'unsafe-inline'; "
+    "img-src 'self' data: blob: https://*.openfreemap.org https://*.openstreetmap.org; "
+    "font-src 'self' data:; "
+    "connect-src 'self' https://*.openfreemap.org https://*.openstreetmap.org; "
+    "object-src 'none'; "
+    "base-uri 'self'; "
+    "frame-ancestors 'none'"
+)
+
+
+@app.middleware("http")
+async def _security_headers(request: Request, call_next):
+    response = await call_next(request)
+    response.headers["X-Content-Type-Options"] = "nosniff"
+    response.headers["X-Frame-Options"] = "DENY"
+    response.headers["Referrer-Policy"] = "strict-origin-when-cross-origin"
+    response.headers["Content-Security-Policy"] = _CSP
+    return response
+
 
 def get_session():
     with Session(engine) as session:
@@ -118,8 +213,9 @@ def health():
         with engine.connect() as conn:
             conn.execute(text("SELECT 1"))
         return {"status": "ok", "db": db_kind, "sectors_indexed": len(_sector_ids)}
-    except Exception as exc:
-        raise HTTPException(status_code=500, detail=str(exc))
+    except Exception:
+        logger.exception("health check failed")
+        raise HTTPException(status_code=500, detail="Database unavailable")
 
 
 @app.get("/api/hello")
@@ -128,17 +224,33 @@ def hello():
 
 
 # ---------------------------------------------------------------------------
+# Scenario weights — canonical single source of truth for the frontend.
+# Static between deploys, so cache aggressively. No rate limit needed.
+# Shape: {"family": {category: weight, ...}, "senior": {...}, "remote": {...}}
+# ---------------------------------------------------------------------------
+
+@app.get("/api/weights")
+def weights():
+    return JSONResponse(
+        content=SCENARIO_WEIGHTS,
+        headers={"Cache-Control": "public, max-age=86400"},
+    )
+
+
+# ---------------------------------------------------------------------------
 # Score by address
 # ---------------------------------------------------------------------------
 
 @app.get("/api/score")
+@limiter.limit("30/minute")
 def score_by_address(
+    request: Request,
     address: str = Query(..., description="Street address"),
-    scenario: str = Query("family", description="family | senior | remote"),
+    scenario: Scenario = Query(Scenario.family, description="family | senior | remote"),
     city: str = Query("brussels"),
     db: Session = Depends(get_session),
 ):
-    lat, lng = geocode(address, db)
+    lat, lng = geocode(address, db, city=city)
     if lat is None:
         raise HTTPException(404, detail=f"Address not found: {address!r}")
 
@@ -150,7 +262,7 @@ def score_by_address(
                    "Check that the address is within the city.",
         )
 
-    return _sector_score_response(sector_id, scenario, {"lat": lat, "lng": lng}, db)
+    return _sector_score_response(sector_id, scenario.value, {"lat": lat, "lng": lng}, db)
 
 
 # ---------------------------------------------------------------------------
@@ -160,13 +272,13 @@ def score_by_address(
 @app.get("/api/sector/{sector_id}")
 def score_by_sector(
     sector_id: str,
-    scenario: str = Query("family"),
+    scenario: Scenario = Query(Scenario.family),
     db: Session = Depends(get_session),
 ):
     sector = db.get(Sector, sector_id)
     if sector is None:
         raise HTTPException(404, detail=f"Sector not found: {sector_id!r}")
-    return _sector_score_response(sector_id, scenario, None, db)
+    return _sector_score_response(sector_id, scenario.value, None, db)
 
 
 def _sector_score_response(
@@ -273,9 +385,10 @@ def _tradeoff_narrative(
 def compare_sectors(
     a: str = Query(..., description="Sector ID A"),
     b: str = Query(..., description="Sector ID B"),
-    scenario: str = Query("family"),
+    scenario: Scenario = Query(Scenario.family),
     db: Session = Depends(get_session),
 ):
+    scenario = scenario.value
     sec_a = db.get(Sector, a)
     sec_b = db.get(Sector, b)
     if sec_a is None:
@@ -347,12 +460,13 @@ def compare_sectors(
 
 class ExplainRequest(BaseModel):
     sector_id: str
-    scenario: str = "family"
-    question: str | None = None
+    scenario: Scenario = Scenario.family
+    question: str | None = Field(default=None, max_length=500)
 
 
 @app.post("/api/explain")
-async def explain(body: ExplainRequest, db: Session = Depends(get_session)):
+@limiter.limit("10/minute")
+async def explain(request: Request, body: ExplainRequest, db: Session = Depends(get_session)):
     if not _GROQ_API_KEY:
         raise HTTPException(503, detail="GROQ_API_KEY not configured on this server.")
 
@@ -413,8 +527,11 @@ async def explain(body: ExplainRequest, db: Session = Depends(get_session)):
                 token = chunk.choices[0].delta.content or ""
                 if token:
                     yield f"data: {json.dumps({'token': token})}\n\n"
-        except Exception as exc:
-            yield f"data: {json.dumps({'error': str(exc)})}\n\n"
+        except Exception:
+            # Log the real cause server-side; never leak provider/internal detail
+            # (API keys, upstream URLs, stack info) to the client.
+            logger.exception("explain stream failed")
+            yield f"data: {json.dumps({'error': 'The explanation service is temporarily unavailable.'})}\n\n"
         finally:
             yield "data: [DONE]\n\n"
 
@@ -425,41 +542,88 @@ async def explain(body: ExplainRequest, db: Session = Depends(get_session)):
 # All sectors as GeoJSON (choropleth source)
 # ---------------------------------------------------------------------------
 
+# Module-level cache of already-serialized GeoJSON bodies, keyed by
+# (city, scenario). The choropleth data is static between deploys, so the cache
+# is populated lazily on first request and never invalidated (only 3 valid keys
+# per city). Each value is (etag, body_bytes).
+_GEOJSON_CACHE: dict[tuple[str, str], tuple[str, bytes]] = {}
+
+_GEOJSON_COORD_PRECISION = 5
+
+
+def _round_coords(coords):
+    """Recursively round all float coordinates to _GEOJSON_COORD_PRECISION places.
+
+    GeoJSON coordinate arrays nest arbitrarily (Point -> [x, y],
+    Polygon -> [[[x, y], ...]], etc.); walk them and round every float.
+    """
+    if isinstance(coords, (list, tuple)):
+        return [_round_coords(c) for c in coords]
+    if isinstance(coords, float):
+        return round(coords, _GEOJSON_COORD_PRECISION)
+    return coords
+
+
 @app.get("/api/sectors.geojson")
 def sectors_geojson(
-    scenario: str = Query("family"),
+    request: Request,
+    scenario: Scenario = Query(Scenario.family),
     city: str = Query("brussels"),
     db: Session = Depends(get_session),
 ):
-    sectors = db.exec(select(Sector).where(Sector.city == city)).all()
-    sector_ids = {s.id for s in sectors}
-    scores_by_sector = {
-        row.sector_id: row
-        for row in db.exec(
-            select(SectorScore).where(SectorScore.scenario == scenario)
-        ).all()
-        if row.sector_id in sector_ids
-    }
+    scenario = scenario.value
+    cache_key = (city, scenario)
+    cached = _GEOJSON_CACHE.get(cache_key)
 
-    features = []
-    for s in sectors:
-        if not s.geometry:
-            continue
-        score_row = scores_by_sector.get(s.id)
-        features.append({
-            "type": "Feature",
-            "geometry": s.geometry,
-            "properties": {
-                "id": s.id,
-                "name_fr": s.name_fr,
-                "name_nl": s.name_nl,
-                "population": s.population,
-                "score": score_row.score if score_row else None,
-                "percentile": score_row.percentile if score_row else None,
-            },
-        })
+    if cached is None:
+        sectors = db.exec(select(Sector).where(Sector.city == city)).all()
+        sector_ids = {s.id for s in sectors}
+        scores_by_sector = {
+            row.sector_id: row
+            for row in db.exec(
+                select(SectorScore).where(
+                    SectorScore.scenario == scenario,
+                    SectorScore.sector_id.in_(sector_ids),
+                )
+            ).all()
+        }
 
-    return JSONResponse({"type": "FeatureCollection", "features": features})
+        features = []
+        for s in sectors:
+            if not s.geometry:
+                continue
+            score_row = scores_by_sector.get(s.id)
+            geometry = dict(s.geometry)
+            if "coordinates" in geometry:
+                geometry["coordinates"] = _round_coords(geometry["coordinates"])
+            features.append({
+                "type": "Feature",
+                "geometry": geometry,
+                "properties": {
+                    "id": s.id,
+                    "name_fr": s.name_fr,
+                    "name_nl": s.name_nl,
+                    "population": s.population,
+                    "score": score_row.score if score_row else None,
+                    "percentile": score_row.percentile if score_row else None,
+                },
+            })
+
+        body = json.dumps(
+            {"type": "FeatureCollection", "features": features},
+            ensure_ascii=False,
+        ).encode("utf-8")
+        etag = f'"{hashlib.md5(body).hexdigest()}"'
+        cached = (etag, body)
+        _GEOJSON_CACHE[cache_key] = cached
+
+    etag, body = cached
+    headers = {"Cache-Control": "public, max-age=3600", "ETag": etag}
+
+    if request.headers.get("if-none-match") == etag:
+        return Response(status_code=304, headers=headers)
+
+    return Response(content=body, media_type="application/json", headers=headers)
 
 
 # ---------------------------------------------------------------------------
@@ -497,17 +661,27 @@ def pois(
 # Sector filter — find sectors where all selected categories meet min score
 # ---------------------------------------------------------------------------
 
+# Categories the filter accepts: the scoring breakdown categories plus the
+# POI-presence-only "dog_park". Derived from the shared label map so it stays in
+# sync with the categories the rest of the API understands.
+_FILTER_CATEGORIES = set(_EXPLAIN_CAT_LABELS) | {"dog_park"}
+
+
 @app.get("/api/filter")
 def filter_sectors(
-    scenario: str = Query("family"),
+    scenario: Scenario = Query(Scenario.family),
     categories: str = Query(..., description="Comma-separated category names"),
     min_score: int = Query(60, ge=0, le=100),
     city: str = Query("brussels"),
     db: Session = Depends(get_session),
 ):
+    scenario = scenario.value
     cats = [c.strip() for c in categories.split(",") if c.strip()]
     if not cats:
         raise HTTPException(400, detail="At least one category required")
+    unknown = [c for c in cats if c not in _FILTER_CATEGORIES]
+    if unknown:
+        raise HTTPException(400, detail=f"Unknown categories: {', '.join(unknown)}")
     threshold = min_score / 100.0
     city_sector_ids = {
         s.id for s in db.exec(select(Sector).where(Sector.city == city)).all()

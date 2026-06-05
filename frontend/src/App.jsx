@@ -59,21 +59,49 @@ const MAP_LAYERS = [
   { cat: "sport",    color: "#facc15", label: "Sport" },
 ]
 
-const SCENARIO_WEIGHTS = {
-  family: {
-    school: 15, childcare: 10, supermarket: 10, pharmacy: 8, convenience: 2,
-    gp: 9, hospital: 3, park: 15, playground: 8, transit: 10,
-    cafe: 2, restaurant: 2, library: 3, sport: 3,
-  },
-  senior: {
-    supermarket: 12, convenience: 6, gp: 27, hospital: 8,
-    park: 10, library: 5, transit: 17, cafe: 5, restaurant: 5, sport: 5,
-  },
-  remote: {
-    supermarket: 10, pharmacy: 7, convenience: 3, gp: 5,
-    park: 14, playground: 4, transit: 13, cafe: 8,
-    library: 8, restaurant: 4, sport: 4, coworking: 20,
-  },
+// True when the user has asked the OS to minimise motion. Checked at call time
+// so a mid-session preference change is respected.
+function prefersReducedMotion() {
+  return typeof window !== "undefined" &&
+    window.matchMedia?.("(prefers-reduced-motion: reduce)").matches
+}
+
+// Escape text before interpolating it into popup HTML. POI / sector names come
+// from our own DB today, but escaping hardens against future untrusted sources.
+function escapeHtml(s) {
+  return String(s ?? "").replace(/[&<>"']/g, ch => ({
+    "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;",
+  }[ch]))
+}
+
+// Count a number up from 0 to `target` over `duration` ms with an ease-out
+// curve, via requestAnimationFrame. Respects reduced-motion (returns the final
+// value instantly) and cleans up / restarts whenever the target changes.
+function useCountUp(target, duration = 600) {
+  const safeTarget = Number.isFinite(target) ? target : 0
+  const [value, setValue] = useState(() =>
+    prefersReducedMotion() ? safeTarget : 0
+  )
+  useEffect(() => {
+    if (prefersReducedMotion()) { setValue(safeTarget); return }
+    let raf
+    let start = null
+    const tick = (ts) => {
+      if (start === null) start = ts
+      const t = Math.min(1, (ts - start) / duration)
+      const eased = 1 - Math.pow(1 - t, 3) // ease-out cubic
+      setValue(Math.round(safeTarget * eased))
+      if (t < 1) raf = requestAnimationFrame(tick)
+    }
+    raf = requestAnimationFrame(tick)
+    return () => cancelAnimationFrame(raf)
+  }, [safeTarget, duration])
+  return value
+}
+
+// Inline count-up text for a single number (e.g. percentile, compare scores).
+function CountUp({ value, duration = 600 }) {
+  return <>{useCountUp(value, duration)}</>
 }
 
 function scoreColor(score) {
@@ -81,6 +109,15 @@ function scoreColor(score) {
   if (score >= 50) return "#facc15"
   if (score >= 30) return "#f97316"
   return "#f87171"
+}
+
+// Lighten a #rrggbb hex toward white by `amount` (0..1). Used for gradient top
+// stops so we never depend on CSS color-mix inside SVG.
+function lighten(hex, amount = 0.4) {
+  const n = parseInt(hex.slice(1), 16)
+  const r = (n >> 16) & 255, g = (n >> 8) & 255, b = n & 255
+  const mix = (c) => Math.round(c + (255 - c) * amount)
+  return `rgb(${mix(r)}, ${mix(g)}, ${mix(b)})`
 }
 
 // Read URL params once on module load (before React initialises)
@@ -97,42 +134,99 @@ function readUrlParams() {
 
 function CityPicker({ city, onChange }) {
   const [open, setOpen] = useState(false)
+  const [activeIdx, setActiveIdx] = useState(-1)
   const ref = useRef(null)
+  const btnRef = useRef(null)
+  const optionRefs = useRef([])
   const current = CITIES.find(c => c.id === city) ?? CITIES[0]
+
+  // Indices of selectable (non-"soon") cities, for keyboard navigation.
+  const selectableIdx = CITIES.map((c, i) => (c.soon ? -1 : i)).filter(i => i >= 0)
+
+  const close = useCallback((restoreFocus = true) => {
+    setOpen(false)
+    setActiveIdx(-1)
+    if (restoreFocus) btnRef.current?.focus()
+  }, [])
 
   useEffect(() => {
     if (!open) return
+    // Open onto the current city (or first selectable).
+    const start = CITIES.findIndex(c => c.id === city)
+    setActiveIdx(start >= 0 && !CITIES[start].soon ? start : selectableIdx[0] ?? -1)
     const handler = (e) => {
-      if (ref.current && !ref.current.contains(e.target)) setOpen(false)
+      if (ref.current && !ref.current.contains(e.target)) close(false)
     }
-    const onKey = (e) => { if (e.key === "Escape") setOpen(false) }
     document.addEventListener("mousedown", handler)
-    document.addEventListener("keydown", onKey)
-    return () => {
-      document.removeEventListener("mousedown", handler)
-      document.removeEventListener("keydown", onKey)
+    return () => document.removeEventListener("mousedown", handler)
+  }, [open]) // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Move DOM focus to the active option so screen readers announce it.
+  useEffect(() => {
+    if (open && activeIdx >= 0) optionRefs.current[activeIdx]?.focus()
+  }, [open, activeIdx])
+
+  const choose = (c) => { if (!c.soon) { onChange(c); close() } }
+
+  const moveActive = (dir) => {
+    const pos = selectableIdx.indexOf(activeIdx)
+    const nextPos = pos < 0
+      ? 0
+      : (pos + dir + selectableIdx.length) % selectableIdx.length
+    setActiveIdx(selectableIdx[nextPos])
+  }
+
+  const onListKey = (e) => {
+    switch (e.key) {
+      case "ArrowDown": e.preventDefault(); moveActive(1); break
+      case "ArrowUp":   e.preventDefault(); moveActive(-1); break
+      case "Home":      e.preventDefault(); setActiveIdx(selectableIdx[0]); break
+      case "End":       e.preventDefault(); setActiveIdx(selectableIdx[selectableIdx.length - 1]); break
+      case "Enter":
+      case " ":         e.preventDefault(); if (activeIdx >= 0) choose(CITIES[activeIdx]); break
+      case "Escape":    e.preventDefault(); close(); break
+      case "Tab":       close(false); break
+      default: break
     }
-  }, [open])
+  }
 
   return (
     <div className="city-picker" ref={ref}>
-      <button className="city-btn" onClick={() => setOpen(o => !o)}
-              aria-haspopup="listbox" aria-expanded={open}>
-        {current.label} <span className="city-caret">▾</span>
+      <button
+        ref={btnRef}
+        className="city-btn"
+        onClick={() => setOpen(o => !o)}
+        aria-haspopup="listbox"
+        aria-expanded={open}
+        aria-label={`City: ${current.label}. Change city`}
+      >
+        {current.label} <span className="city-caret" aria-hidden="true">▾</span>
       </button>
       {open && (
-        <div className="city-dropdown">
-          {CITIES.map(c => (
-            <button
+        <ul
+          className="city-dropdown"
+          role="listbox"
+          aria-label="Select city"
+          aria-activedescendant={activeIdx >= 0 ? `city-opt-${CITIES[activeIdx].id}` : undefined}
+          onKeyDown={onListKey}
+        >
+          {CITIES.map((c, i) => (
+            <li
               key={c.id}
+              id={`city-opt-${c.id}`}
+              ref={el => (optionRefs.current[i] = el)}
+              role="option"
+              aria-selected={c.id === city}
+              aria-disabled={c.soon || undefined}
+              tabIndex={-1}
               className={`city-option${c.id === city ? " active" : ""}${c.soon ? " soon" : ""}`}
-              onClick={() => { if (!c.soon) { onChange(c); setOpen(false) } }}
+              onClick={() => choose(c)}
             >
               {c.label}
               {c.soon && <span className="soon-badge">soon</span>}
-            </button>
+            </li>
           ))}
-        </div>
+        </ul>
       )}
     </div>
   )
@@ -140,10 +234,13 @@ function CityPicker({ city, onChange }) {
 
 function ScenarioTabs({ scenario, onChange }) {
   return (
-    <div className="scenario-tabs">
+    <div className="scenario-tabs" role="tablist" aria-label="Scenario">
       {SCENARIOS.map(s => (
         <button
           key={s.id}
+          role="tab"
+          aria-selected={scenario === s.id}
+          tabIndex={scenario === s.id ? 0 : -1}
           className={`tab-btn${scenario === s.id ? " active" : ""}`}
           onClick={() => onChange(s.id)}
         >
@@ -154,15 +251,30 @@ function ScenarioTabs({ scenario, onChange }) {
   )
 }
 
-function PreferenceFilter({ filterCats, onToggle, onClear, filterMatching, minScore, onMinScore }) {
+// Categories a given scenario actually scores, plus dog_park which the backend
+// always allows. Chips for categories absent from the scenario weights are
+// hidden — selecting them would always return "no matches" with no explanation.
+// `weights` is the full {scenario: {cat: weight}} map fetched from the backend.
+// Until it loads (or if the fetch failed) it is null/empty: fall back to every
+// known category so the app still works offline-ish.
+function scenarioCategories(scenario, weights) {
+  const w = weights?.[scenario]
+  if (!w) return Object.keys(CATEGORY_LABELS)
+  return Object.keys(CATEGORY_LABELS).filter(
+    cat => cat in w || cat === "dog_park"
+  )
+}
+
+function PreferenceFilter({ scenario, weights, weightsLoaded, filterCats, onToggle, onClear, filterMatching, minScore, onMinScore }) {
   const active  = filterCats.size > 0
   const count   = filterMatching?.length ?? null
   const loading = active && filterMatching === null
+  const cats    = scenarioCategories(scenario, weights)
 
   return (
     <div className="filter-section">
       <div className="filter-header">
-        <p className="section-title">Find by amenity</p>
+        <h2 className="section-title">Find by amenity</h2>
         {active && (
           <div className="filter-header-right">
             <span className="filter-count">{loading ? "…" : `${count} sectors`}</span>
@@ -171,28 +283,38 @@ function PreferenceFilter({ filterCats, onToggle, onClear, filterMatching, minSc
         )}
       </div>
       <div className="filter-chips">
-        {Object.entries(CATEGORY_LABELS).map(([cat, label]) => (
-          <button
-            key={cat}
-            className={`filter-chip${filterCats.has(cat) ? " active" : ""}`}
-            onClick={() => onToggle(cat)}
-          >
-            {label}
-          </button>
-        ))}
+        {!weightsLoaded && (
+          <span className="filter-loading">Loading preferences…</span>
+        )}
+        {weightsLoaded && cats.map(cat => {
+          const isActive = filterCats.has(cat)
+          return (
+            <button
+              key={cat}
+              className={`filter-chip${isActive ? " active" : ""}`}
+              aria-pressed={isActive}
+              onClick={() => onToggle(cat)}
+            >
+              {CATEGORY_LABELS[cat]}
+            </button>
+          )
+        })}
       </div>
       {active && (
         <div className="filter-threshold">
-          <span className="threshold-label">Min score:</span>
-          {FILTER_THRESHOLDS.map(t => (
-            <button
-              key={t.value}
-              className={`threshold-btn${minScore === t.value ? " active" : ""}`}
-              onClick={() => onMinScore(t.value)}
-            >
-              {t.label} {t.value}+
-            </button>
-          ))}
+          <span className="threshold-label" id="min-score-label">Min score:</span>
+          <div className="threshold-btns" role="group" aria-labelledby="min-score-label">
+            {FILTER_THRESHOLDS.map(t => (
+              <button
+                key={t.value}
+                className={`threshold-btn${minScore === t.value ? " active" : ""}`}
+                aria-pressed={minScore === t.value}
+                onClick={() => onMinScore(t.value)}
+              >
+                {t.label} {t.value}+
+              </button>
+            ))}
+          </div>
         </div>
       )}
       {active && !loading && count === 0 && (
@@ -238,7 +360,7 @@ function TourCard({ step, onNext, onSkip }) {
           <span key={i} className={`tour-dot${i === step ? " active" : ""}${i < step ? " done" : ""}`} />
         ))}
       </div>
-      <div className="tour-icon">{s.icon}</div>
+      <div className="tour-icon" aria-hidden="true">{s.icon}</div>
       <p className="tour-title">{s.title}</p>
       <p className="tour-body">{s.body}</p>
       <div className="tour-actions">
@@ -275,30 +397,55 @@ function ScoreRing({ score }) {
   const circ = 2 * Math.PI * r
   const dash = (score / 100) * circ
   const color = scoreColor(score)
+  // Lighter top-stop for a subtle gradient stroke; unique id per score band so
+  // two rings (e.g. compare) never share a gradient definition.
+  const gradId = `ring-grad-${color.replace("#", "")}`
+  const lighter = lighten(color, 0.35)
+  const display = useCountUp(score, 600)
   return (
     <svg className="score-ring" width="110" height="110" viewBox="0 0 110 110"
          role="img" aria-label={`Fit score ${score} out of 100`}>
+      <defs>
+        <linearGradient id={gradId} x1="0" y1="0" x2="1" y2="1">
+          <stop offset="0%" stopColor={lighter} />
+          <stop offset="100%" stopColor={color} />
+        </linearGradient>
+      </defs>
       <circle cx="55" cy="55" r={r} fill="none" stroke="#242938" strokeWidth="9" />
       <circle
         cx="55" cy="55" r={r} fill="none"
-        stroke={color} strokeWidth="9"
+        stroke={`url(#${gradId})`} strokeWidth="9"
         strokeDasharray={`${dash} ${circ}`}
         strokeLinecap="round"
         transform="rotate(-90 55 55)"
-        style={{ transition: "stroke-dasharray 0.7s ease" }}
+        style={{
+          transition: "stroke-dasharray 0.7s ease",
+          filter: `drop-shadow(0 0 5px ${color}66)`,
+        }}
       />
       <text x="55" y="61" textAnchor="middle" fill="#f8fafc" fontSize="26" fontWeight="700">
-        {score}
+        {display}
       </text>
     </svg>
   )
 }
 
-function CategoryBars({ breakdown, scenario }) {
-  const weights = SCENARIO_WEIGHTS[scenario] ?? {}
+function CategoryBars({ breakdown, scenario, weights }) {
+  // Re-key the whole list on sector + scenario so the bars remount and replay
+  // their 0 -> value width transition on each new result.
+  const sortKey = `${scenario}`
+  const w = weights?.[scenario] ?? {}
+  // If weights have not arrived (or failed to load), fall back to showing every
+  // category present in the breakdown so the section is never empty.
+  const haveWeights = Object.keys(w).length > 0
   const items = Object.entries(breakdown)
-    .filter(([cat]) => cat in weights && cat in CATEGORY_LABELS)
-    .map(([cat, raw]) => ({ cat, score: Math.min(100, Math.round(raw * 100)), weight: weights[cat] }))
+    .filter(([cat]) =>
+      cat in CATEGORY_LABELS && (haveWeights ? cat in w : true))
+    .map(([cat, raw]) => ({
+      cat,
+      score: Math.min(100, Math.round(raw * 100)),
+      weight: w[cat] ?? 0,
+    }))
     .sort((a, b) => b.weight - a.weight)
 
   return (
@@ -307,15 +454,37 @@ function CategoryBars({ breakdown, scenario }) {
         <div key={cat} className="bar-row">
           <span className="bar-label">{CATEGORY_LABELS[cat]}</span>
           <div className="bar-track">
-            <div
-              className="bar-fill"
-              style={{ width: `${score}%`, backgroundColor: scoreColor(score) }}
-            />
+            <Bar key={`${sortKey}-${cat}`} score={score} />
           </div>
           <span className="bar-score">{score}</span>
         </div>
       ))}
     </div>
+  )
+}
+
+// A single category bar that animates its width from 0 to `score` on mount.
+// Remounting (via key) on each new sector re-triggers the grow transition.
+// The vertical gradient (lighter top) gives the fill a touch of depth.
+function Bar({ score }) {
+  const [grown, setGrown] = useState(prefersReducedMotion())
+  useEffect(() => {
+    if (prefersReducedMotion()) return
+    const id = requestAnimationFrame(() => setGrown(true))
+    return () => cancelAnimationFrame(id)
+  }, [])
+  const color = scoreColor(score)
+  return (
+    <div
+      className="bar-fill"
+      style={{
+        width: grown ? `${score}%` : "0%",
+        // Solid colour as a base; a lighter top stop adds a touch of depth.
+        // Computed in JS (lighten) so we never depend on CSS color-mix.
+        backgroundColor: color,
+        backgroundImage: `linear-gradient(180deg, ${lighten(color, 0.22)} 0%, ${color} 100%)`,
+      }}
+    />
   )
 }
 
@@ -365,8 +534,10 @@ function ComparePanel({ cmp, onClose }) {
           { side: "b", sec: b.sector, score: b.score, pct: b.percentile },
         ].map(({ side, sec, score, pct }) => (
           <div key={side} className={`compare-side compare-side-${side}`}>
-            <span className="compare-sector-name">{sec.name_fr || sec.id}</span>
-            <span className="compare-score" style={{ color: scoreColor(score) }}>{score}</span>
+            <span className="compare-sector-name" lang="fr">{sec.name_fr || sec.id}</span>
+            <span className="compare-score" style={{ color: scoreColor(score) }}>
+              <CountUp value={score} />
+            </span>
             {Number.isFinite(pct) && <span className="compare-pct">top {Math.max(1, 100 - pct)}%</span>}
           </div>
         ))}
@@ -414,7 +585,7 @@ function ImprovementsList({ improvements, onHighlight }) {
   if (!improvements?.length) return null
   return (
     <div className="improvements">
-      <p className="section-title">Score boosters</p>
+      <h3 className="section-title">Score boosters</h3>
       {improvements.map(imp => (
         <button key={imp.rank} className="imp-item" onClick={() => onHighlight?.(imp)}>
           <span className="imp-title">{imp.title}</span>
@@ -425,7 +596,7 @@ function ImprovementsList({ improvements, onHighlight }) {
         </button>
       ))}
       <p className="imp-map-hint">
-        <span className="imp-dot" /> yellow markers on the map show suggested locations
+        <span className="imp-dot" aria-hidden="true" /> yellow markers on the map show suggested locations
       </p>
     </div>
   )
@@ -503,15 +674,16 @@ function MapLayerToggles({ sectorId, mapInst, mapReady, active, onActiveChange }
 
   return (
     <div>
-      <p className="section-title">Show on map</p>
+      <h3 className="section-title">Show on map</h3>
       <div className="layer-toggles">
         {MAP_LAYERS.map(({ cat, color, label }) => (
           <button
             key={cat}
             className={`layer-btn${active.has(cat) ? " active" : ""}`}
+            aria-pressed={active.has(cat)}
             onClick={() => toggle(cat, color)}
           >
-            <span className="layer-dot" style={{ background: color }} />
+            <span className="layer-dot" style={{ background: color }} aria-hidden="true" />
             {label}
           </button>
         ))}
@@ -590,27 +762,75 @@ function GroqPanel({ sectorId, scenario }) {
 
   return (
     <div className="grok-panel">
-      <p className="section-title">Ask Groq</p>
+      <h3 className="section-title">Ask Groq</h3>
       <div className="grok-input-row">
         <input
           className="address-input grok-input"
           placeholder="Any question about this neighbourhood…"
+          aria-label="Ask a question about this neighbourhood"
           value={question}
           onChange={e => setQuestion(e.target.value)}
           onKeyDown={e => e.key === "Enter" && !streaming && ask()}
           disabled={streaming}
         />
-        <button className="search-btn grok-btn" onClick={ask} disabled={streaming}>
-          {streaming ? "…" : "Ask"}
+        <button className="search-btn grok-btn" onClick={ask} disabled={streaming} aria-busy={streaming || undefined}>
+          {streaming ? <span className="btn-spinner" aria-hidden="true" /> : "Ask"}
         </button>
       </div>
-      {groqError && <p className="error-msg">{groqError}</p>}
+      {groqError && <p className="error-msg" role="alert">{groqError}</p>}
       {(answer || streaming) && (
         <div className={`grok-answer${streaming ? " streaming" : ""}`} aria-live="polite">
           {answer}
-          {streaming && <span className="grok-cursor" />}
+          {streaming && <span className="grok-cursor" aria-hidden="true" />}
         </div>
       )}
+    </div>
+  )
+}
+
+// Keyboard / screen-reader path to any sector — the map itself is mouse-only.
+// Groups sectors by commune (NIS code = first 5 chars of the sector id) and
+// drives the same selection handler as a map click.
+function SectorPicker({ sectorsGeo, selectedId, onSelect }) {
+  const groups = {}
+  for (const feat of sectorsGeo?.features ?? []) {
+    const id = feat.properties?.id
+    if (!id) continue
+    const nis = id.slice(0, 5)
+    const commune = COMMUNES[nis] ?? "Other"
+    ;(groups[commune] ??= []).push({
+      id,
+      name: feat.properties?.name_fr || id,
+    })
+  }
+  const communeNames = Object.keys(groups).sort((a, b) => a.localeCompare(b))
+  for (const c of communeNames) {
+    groups[c].sort((a, b) => a.name.localeCompare(b.name, "fr"))
+  }
+
+  const disabled = communeNames.length === 0
+
+  return (
+    <div className="sector-picker-row">
+      <label className="sector-picker-label" htmlFor="sector-picker">
+        Or pick a sector from the list
+      </label>
+      <select
+        id="sector-picker"
+        className="sector-picker"
+        value={selectedId ?? ""}
+        disabled={disabled}
+        onChange={e => { if (e.target.value) onSelect(e.target.value) }}
+      >
+        <option value="">{disabled ? "Loading sectors…" : "Choose a sector…"}</option>
+        {communeNames.map(commune => (
+          <optgroup key={commune} label={commune}>
+            {groups[commune].map(s => (
+              <option key={s.id} value={s.id}>{s.name}</option>
+            ))}
+          </optgroup>
+        ))}
+      </select>
     </div>
   )
 }
@@ -643,6 +863,11 @@ export default function App() {
   const urlParams = useRef(readUrlParams())
 
   const [city, setCity]                   = useState("brussels")
+  // Scenario -> {category: weight}, fetched once from the backend. Null until
+  // it resolves (or fails); on failure we keep {} so the UI falls back to
+  // showing every known category rather than crashing.
+  const [weights, setWeights]             = useState(null)
+  const weightsLoaded = weights !== null
   const [addressInput, setAddressInput]   = useState("")
   const [scenario, setScenario]           = useState(urlParams.current.scenario ?? "family")
   const [loading, setLoading]             = useState(false)
@@ -711,6 +936,20 @@ export default function App() {
     setFilterMatching(null)
   }, [scenario])
 
+  // Drop any selected categories that the current scenario does not score —
+  // chips for them are hidden, and the backend would return "no matches".
+  // No-op until weights have loaded (we cannot know what is allowed yet).
+  useEffect(() => {
+    if (!weightsLoaded) return
+    const allowed = new Set(scenarioCategories(scenario, weights))
+    setFilterCatsByScenario(prev => {
+      const set = prev[scenario] ?? new Set()
+      const pruned = new Set([...set].filter(c => allowed.has(c)))
+      if (pruned.size === set.size) return prev
+      return { ...prev, [scenario]: pruned }
+    })
+  }, [scenario, weights, weightsLoaded])
+
   // ── City switch ─────────────────────────────────────────────────────────
   const handleCityChange = useCallback((cityConfig) => {
     setCity(cityConfig.id)
@@ -730,8 +969,23 @@ export default function App() {
         if (m.getLayer(`poi-${cat}`)) m.removeLayer(`poi-${cat}`)
         if (m.getSource(`poi-src-${cat}`)) m.removeSource(`poi-src-${cat}`)
       })
-      m.flyTo({ center: cityConfig.center, zoom: cityConfig.zoom, duration: 1200 })
+      m.flyTo({ center: cityConfig.center, zoom: cityConfig.zoom, duration: 1200, animate: !prefersReducedMotion() })
     }
+  }, [])
+
+  // ── Load scenario weights (once) ──────────────────────────────────────────
+  // Drives which amenity chips appear per scenario and the category-bar order.
+  // On failure we set {} so scenarioCategories falls back to all categories.
+  useEffect(() => {
+    let cancelled = false
+    fetch(`${API}/api/weights`)
+      .then(r => r.json())
+      .then(data => { if (!cancelled) setWeights(data ?? {}) })
+      .catch(e => {
+        console.error("weights load failed", e)
+        if (!cancelled) setWeights({})
+      })
+    return () => { cancelled = true }
   }, [])
 
   // ── Init map ────────────────────────────────────────────────────────────
@@ -800,12 +1054,27 @@ export default function App() {
       paint: { "line-color": "#ffffff", "line-width": 0.5, "line-opacity": 0.35 },
     })
 
+    // Soft glow underneath the crisp selection outline (wider, translucent,
+    // blurred) — gives the selected sector a clear sense of elevation.
+    m.addLayer({
+      id: "sector-selected-glow",
+      type: "line",
+      source: "sectors",
+      filter: ["==", ["get", "id"], ""],
+      paint: {
+        "line-color": "#bfdbfe",
+        "line-width": 9,
+        "line-opacity": 0.45,
+        "line-blur": 4,
+      },
+    })
+
     m.addLayer({
       id: "sector-selected",
       type: "line",
       source: "sectors",
       filter: ["==", ["get", "id"], ""],
-      paint: { "line-color": "#ffffff", "line-width": 3, "line-opacity": 1 },
+      paint: { "line-color": "#ffffff", "line-width": 3.2, "line-opacity": 1 },
     })
 
     m.addLayer({
@@ -826,9 +1095,10 @@ export default function App() {
       const feat = e.features?.[0]
       if (!feat) return
       const { name_fr, score } = feat.properties
-      const scoreStr = score != null ? ` <span class="popup-score">${score}</span>` : ""
+      const scoreStr = score != null ? ` <span class="popup-score">${escapeHtml(score)}</span>` : ""
+      const label = escapeHtml(name_fr || feat.properties.id)
       popup.setLngLat(e.lngLat)
-        .setHTML(`<div class="map-popup">${name_fr || feat.properties.id}${scoreStr}</div>`)
+        .setHTML(`<div class="map-popup" lang="fr">${label}${scoreStr}</div>`)
         .addTo(m)
     })
     m.on("mouseleave", "sectors-fill", () => {
@@ -907,12 +1177,41 @@ export default function App() {
     if (!mapReady || !m?.getLayer("sector-selected")) return
     const id = result?.sector?.id ?? ""
     m.setFilter("sector-selected", ["==", ["get", "id"], id])
+    if (m.getLayer("sector-selected-glow"))
+      m.setFilter("sector-selected-glow", ["==", ["get", "id"], id])
+
+    // One-shot selection pulse on the glow line: a brief widen-and-fade back to
+    // the resting state. Driven by rAF so it auto-respects reduced motion.
+    let raf
+    if (id && m.getLayer("sector-selected-glow") && !prefersReducedMotion()) {
+      const start = performance.now()
+      const dur = 500
+      const pulse = (now) => {
+        const t = Math.min(1, (now - start) / dur)
+        const k = 1 - Math.pow(1 - t, 2) // ease-out
+        m.setPaintProperty("sector-selected-glow", "line-width", 18 - 9 * k)
+        m.setPaintProperty("sector-selected-glow", "line-opacity", 0.75 - 0.30 * k)
+        if (t < 1) raf = requestAnimationFrame(pulse)
+      }
+      raf = requestAnimationFrame(pulse)
+    }
+
     if (result?.sector?.centroid) {
       m.flyTo({
         center: [result.sector.centroid.lng, result.sector.centroid.lat],
         zoom: Math.max(m.getZoom(), 13),
         duration: 800,
+        animate: !prefersReducedMotion(),
       })
+    }
+
+    // Cancel an in-flight pulse and restore resting glow if selection changes.
+    return () => {
+      if (raf) cancelAnimationFrame(raf)
+      if (m.getLayer("sector-selected-glow")) {
+        m.setPaintProperty("sector-selected-glow", "line-width", 9)
+        m.setPaintProperty("sector-selected-glow", "line-opacity", 0.45)
+      }
     }
   }, [mapReady, result])
 
@@ -934,7 +1233,7 @@ export default function App() {
     const bounds = new maplibregl.LngLatBounds()
     bounds.extend([ca.lng, ca.lat])
     bounds.extend([cb.lng, cb.lat])
-    m.fitBounds(bounds, { padding: 100, maxZoom: 14, duration: 900 })
+    m.fitBounds(bounds, { padding: 100, maxZoom: 14, duration: 900, animate: !prefersReducedMotion() })
   }, [mapReady, compareResult])
 
   // ── Improvement markers layer ───────────────────────────────────────────
@@ -976,7 +1275,7 @@ export default function App() {
         if (!p) return
         const sign = p.delta > 0 ? "+" : ""
         impPopup.setLngLat(e.lngLat)
-          .setHTML(`<div class="map-popup imp-popup">${p.title}<span class="popup-score">${sign}${p.delta} pts</span></div>`)
+          .setHTML(`<div class="map-popup imp-popup">${escapeHtml(p.title)}<span class="popup-score">${sign}${escapeHtml(p.delta)} pts</span></div>`)
           .addTo(m)
       })
       m.on("mouseleave", "improvements-circles", () => {
@@ -989,6 +1288,7 @@ export default function App() {
         center: [highlightedImp.suggested_lng, highlightedImp.suggested_lat],
         zoom: Math.max(m.getZoom(), 14),
         duration: 500,
+        animate: !prefersReducedMotion(),
       })
     }
   // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -1132,11 +1432,12 @@ export default function App() {
 
   return (
     <div className="app">
+      <a className="skip-link" href="#results">Skip to results</a>
       <aside className="panel">
         {/* Header */}
         <div className="panel-header">
-          <span className="logo-dot" />
-          <span className="logo-text">Neighbourhood Fit</span>
+          <span className="logo-dot" aria-hidden="true" />
+          <h1 className="logo-text">Neighbourhood Fit</h1>
           <CityPicker city={city} onChange={handleCityChange} />
           <button className="tour-trigger" onClick={startTour} title="Feature tour" aria-label="Feature tour">?</button>
         </div>
@@ -1146,6 +1447,9 @@ export default function App() {
 
         {/* Preference filter */}
         <PreferenceFilter
+          scenario={scenario}
+          weights={weights}
+          weightsLoaded={weightsLoaded}
           filterCats={filterCats}
           onToggle={toggleFilterCat}
           onClear={clearFilter}
@@ -1159,16 +1463,32 @@ export default function App() {
           <input
             className="address-input"
             placeholder="Address or neighbourhood…"
+            aria-label="Search address or neighbourhood"
+            aria-invalid={error ? true : undefined}
+            aria-describedby={error ? "search-error" : undefined}
             value={addressInput}
             onChange={e => setAddressInput(e.target.value)}
             onKeyDown={e => e.key === "Enter" && !loading && fetchByAddress()}
           />
-          <button className="search-btn" onClick={fetchByAddress} disabled={loading}>
-            {loading ? "…" : "Go"}
+          <button className="search-btn" onClick={fetchByAddress} disabled={loading} aria-busy={loading || undefined}>
+            {loading ? <span className="btn-spinner" aria-hidden="true" /> : "Go"}
           </button>
         </div>
 
-        {error && <p className="error-msg">{error}</p>}
+        {/* Keyboard / screen-reader path to a sector (the map is mouse-only) */}
+        <SectorPicker
+          sectorsGeo={sectorsGeo}
+          selectedId={result?.sector?.id}
+          onSelect={id => {
+            if (compareModeRef.current && resultRef.current?.sector?.id) {
+              fetchCompareByRef.current(id)
+            } else {
+              fetchBySectorIdRef.current(id)
+            }
+          }}
+        />
+
+        {error && <p className="error-msg" role="alert" id="search-error">{error}</p>}
 
         {!result && !loading && tourStep === null && (
           <p className="hint">
@@ -1183,17 +1503,17 @@ export default function App() {
         {loading && <div className="skeleton-block" />}
 
         {result && !loading && (
-          <div className="results">
-            <div className="sector-name">
-              {result.sector.name_fr || result.sector.id}
+          <main className="results" id="results" key={result.sector.id} aria-label="Neighbourhood results">
+            <h2 className="sector-name">
+              <span lang="fr">{result.sector.name_fr || result.sector.id}</span>
               {communeName && <span className="sector-muni"> · {communeName}</span>}
-            </div>
+            </h2>
 
             <div className="score-card">
               <ScoreRing score={result.score} />
               <div className="score-meta">
                 <p className="score-scenario">{scenarioLabel} Fit Score</p>
-                {topPct != null && <p className="score-pct">Top {topPct}% in {cityLabel}</p>}
+                {topPct != null && <p className="score-pct">Top <CountUp value={topPct} />% in {cityLabel}</p>}
                 {result.sector.population > 0 && (
                   <p className="score-pop">
                     ~{result.sector.population.toLocaleString()} residents
@@ -1220,6 +1540,7 @@ export default function App() {
                   <input
                     className="address-input"
                     placeholder="Second address…"
+                    aria-label="Second address to compare"
                     value={compareAddr}
                     onChange={e => setCompareAddr(e.target.value)}
                     onKeyDown={e => e.key === "Enter" && !compareLoading && fetchCompare()}
@@ -1229,8 +1550,9 @@ export default function App() {
                     onClick={fetchCompare}
                     disabled={compareLoading || !compareAddr.trim()}
                     aria-label="Run comparison"
+                    aria-busy={compareLoading || undefined}
                   >
-                    {compareLoading ? "…" : "↔"}
+                    {compareLoading ? <span className="btn-spinner" aria-hidden="true" /> : "↔"}
                   </button>
                   <button
                     className="compare-cancel"
@@ -1258,15 +1580,25 @@ export default function App() {
               )}
             />
 
-            <p className="section-title">Category breakdown</p>
-            <CategoryBars breakdown={result.breakdown} scenario={scenario} />
+            <h3 className="section-title">Category breakdown</h3>
+            <CategoryBars breakdown={result.breakdown} scenario={scenario} weights={weights} />
             <DisclosureFooter disclosure={result.disclosure} />
-          </div>
+          </main>
         )}
       </aside>
 
       {/* Map */}
-      <div className="map-wrap" ref={mapContainer}>
+      <div
+        className="map-wrap"
+        ref={mapContainer}
+        role="application"
+        aria-label="Map of Brussels sectors coloured by fit score"
+      >
+        <p className="sr-only">
+          This map is interactive with a mouse. Keyboard and screen-reader users
+          can select any sector using the sector list or the address search in
+          the panel.
+        </p>
         <MapLegend />
       </div>
     </div>

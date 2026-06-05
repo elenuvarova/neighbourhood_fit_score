@@ -7,8 +7,7 @@ Safe to re-run: skips entirely if the Sector table is already populated.
 Run from backend/ directory:
   python seed.py
 
-Used as Render preDeployCommand:
-  cd /app/backend && python seed.py
+Run automatically on container boot (Docker CMD) before uvicorn starts.
 
 Seed files expected at:
   pipeline/data/processed/sectors.geojson          (Brussels)
@@ -34,6 +33,11 @@ sys.path.insert(0, str(_BACKEND))
 
 from app.database import engine
 from app.models import GeocodeCache, Improvement, Poi, Sector, SectorScore  # noqa: F401
+# Canonical scenario weights live in pipeline/config.py — import rather than
+# duplicate so the two never drift. config.py imports only `pathlib` at module
+# top (heavy libs are imported lazily inside functions), so this is safe under
+# runtime-only deps.
+from pipeline.config import SCENARIO_WEIGHTS as _WEIGHTS
 
 PROCESSED        = _BACKEND / "pipeline" / "data" / "processed"
 SECTORS_FILE     = PROCESSED / "sectors.geojson"
@@ -42,24 +46,6 @@ IMPS_FILE        = PROCESSED / "improvements.csv"
 NARRATIVES_FILE  = PROCESSED / "narratives.csv"
 TRANSIT_FILE     = PROCESSED / "transit_stops.geojson"
 POIS_MAP_FILE    = PROCESSED / "pois_map.geojson"   # filtered: school/park/pharmacy/cafe/sport
-
-# Scenario weights (mirrors config.py — kept in sync manually)
-_WEIGHTS = {
-    "family": {
-        "school": 15, "childcare": 10, "supermarket": 10, "pharmacy": 8, "convenience": 2,
-        "gp": 9, "hospital": 3, "park": 15, "playground": 8, "transit": 10,
-        "cafe": 2, "restaurant": 2, "library": 3, "sport": 3,
-    },
-    "senior": {
-        "supermarket": 12, "convenience": 6, "gp": 27, "hospital": 8,
-        "park": 10, "library": 5, "transit": 17, "cafe": 5, "restaurant": 5, "sport": 5,
-    },
-    "remote": {
-        "supermarket": 10, "pharmacy": 7, "convenience": 3, "gp": 5,
-        "park": 14, "playground": 4, "transit": 13, "cafe": 8,
-        "library": 8, "restaurant": 4, "sport": 4, "coworking": 20,
-    },
-}
 
 _LABELS = {
     "school": "schools", "childcare": "childcare", "playground": "playgrounds",
@@ -200,8 +186,16 @@ def _seed_transit(session: Session, transit_file: Path | None = None) -> int:
     return len(records)
 
 
-def _seed_pois_categories(session: Session, categories: set[str], pois_file: Path | None = None) -> int:
-    """Seed only the specified POI categories from pois_map.geojson."""
+def _seed_pois(
+    session: Session,
+    pois_file: Path | None = None,
+    categories: set[str] | None = None,
+) -> int:
+    """Seed map-visible POIs from pois_map.geojson.
+
+    `categories=None` seeds every category found in the file; passing a set
+    restricts the seed to those categories (used to backfill missing ones).
+    """
     path = pois_file or POIS_MAP_FILE
     if not path.exists():
         return 0
@@ -213,39 +207,12 @@ def _seed_pois_categories(session: Session, categories: set[str], pois_file: Pat
             continue
         p = feat.get("properties", {})
         cat = p.get("category", "")
-        if cat not in categories:
+        if categories is not None and cat not in categories:
             continue
         coords = feat["geometry"]["coordinates"]
         records.append(Poi(
             sector_id=str(p["sector_id"]) if p.get("sector_id") else None,
             category=cat,
-            name=p.get("name") or p.get("name:fr") or p.get("name:nl") or None,
-            lat=round(float(coords[1]), 6),
-            lng=round(float(coords[0]), 6),
-        ))
-    BATCH = 500
-    for i in range(0, len(records), BATCH):
-        session.add_all(records[i : i + BATCH])
-        session.flush()
-    return len(records)
-
-
-def _seed_pois(session: Session, pois_file: Path | None = None) -> int:
-    """Seed map-visible POIs (school/park/pharmacy/cafe/sport) from pois_map.geojson."""
-    path = pois_file or POIS_MAP_FILE
-    if not path.exists():
-        return 0
-    with open(path) as f:
-        gj = json.load(f)
-    records = []
-    for feat in gj["features"]:
-        if feat.get("geometry") is None:
-            continue
-        coords = feat["geometry"]["coordinates"]
-        p = feat.get("properties", {})
-        records.append(Poi(
-            sector_id=str(p["sector_id"]) if p.get("sector_id") else None,
-            category=p.get("category", ""),
             name=p.get("name") or p.get("name:fr") or p.get("name:nl") or None,
             lat=round(float(coords[1]), 6),
             lng=round(float(coords[0]), 6),
@@ -324,15 +291,32 @@ def _reseed_scores_improvements(session: Session) -> None:
 
 
 def _migrate(engine) -> None:
-    """Apply schema changes that create_all won't handle on existing tables."""
+    """Apply schema changes that create_all won't handle on existing tables.
+
+    `ADD COLUMN IF NOT EXISTS` is Postgres-only syntax — SQLite errors on it.
+    On SQLite a fresh `create_all` already builds the `city` column + index from
+    the model, so we only need to patch pre-existing tables. We therefore run the
+    Postgres ALTERs only on Postgres, and on SQLite add the column via a
+    PRAGMA-guarded check (covers an old SQLite file that predates the column).
+    """
     from sqlalchemy import text as _text
     with engine.connect() as conn:
-        conn.execute(_text(
-            "ALTER TABLE sector ADD COLUMN IF NOT EXISTS city TEXT NOT NULL DEFAULT 'brussels'"
-        ))
-        conn.execute(_text(
-            "CREATE INDEX IF NOT EXISTS idx_sector_city ON sector(city)"
-        ))
+        if engine.dialect.name == "postgresql":
+            conn.execute(_text(
+                "ALTER TABLE sector ADD COLUMN IF NOT EXISTS city TEXT NOT NULL DEFAULT 'brussels'"
+            ))
+            conn.execute(_text(
+                "CREATE INDEX IF NOT EXISTS idx_sector_city ON sector(city)"
+            ))
+        else:  # sqlite (local dev) — no IF NOT EXISTS for columns
+            cols = {row[1] for row in conn.execute(_text("PRAGMA table_info(sector)"))}
+            if "city" not in cols:
+                conn.execute(_text(
+                    "ALTER TABLE sector ADD COLUMN city TEXT NOT NULL DEFAULT 'brussels'"
+                ))
+            conn.execute(_text(
+                "CREATE INDEX IF NOT EXISTS idx_sector_city ON sector(city)"
+            ))
         conn.commit()
     print("  ✓ schema migration OK")
 
@@ -386,6 +370,9 @@ def main() -> None:
         print("─── Seeding database ───")
 
         if not existing_sectors:
+            # Fresh DB: _seed_city seeds sectors, scores, improvements, transit
+            # AND the map POIs — so we must NOT also run the POI backfill below,
+            # or every map POI is inserted twice.
             seeded = []
             for city in KNOWN_CITIES:
                 if _seed_city(session, city):
@@ -393,16 +380,17 @@ def main() -> None:
             if seeded:
                 print(f"\n  ✓ Sectors/scores/improvements seeded: {', '.join(seeded)}")
         else:
+            # Sectors already present (redeploy): only backfill POI categories
+            # that are missing from the DB but present in the seed file.
             print("  Sectors already present — skipping sector/score seed")
-
-        if missing_cats:
-            print(f"  Seeding missing POI categories: {', '.join(sorted(missing_cats))} …")
-            n_p = _seed_pois_categories(session, missing_cats)
-            print(f"  POIs added: {n_p}")
-        elif not existing_poi_cats:
-            print("  Seeding map POIs …")
-            n_p = _seed_pois(session)
-            print(f"  Map POIs: {n_p}")
+            if missing_cats:
+                print(f"  Seeding missing POI categories: {', '.join(sorted(missing_cats))} …")
+                n_p = _seed_pois(session, categories=missing_cats)
+                print(f"  POIs added: {n_p}")
+            elif not existing_poi_cats:
+                print("  Seeding map POIs …")
+                n_p = _seed_pois(session)
+                print(f"  Map POIs: {n_p}")
 
         session.commit()
         print("  ✓ Done")
